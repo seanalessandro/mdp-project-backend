@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"log"
 	"mdp-project-backend/config"
 	"mdp-project-backend/models"
 	"mdp-project-backend/utils"
@@ -13,189 +14,98 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 )
 
+// Ganti lagi fungsi Login Anda dengan versi final ini
 func Login(c *fiber.Ctx) error {
-	var loginReq models.LoginRequest
-	if err := c.BodyParser(&loginReq); err != nil {
-		return c.Status(400).JSON(fiber.Map{
-			"error": "Invalid request format",
-		})
+	var req models.LoginRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request format"})
 	}
 
-	// Validate input format
-	if err := utils.ValidateUsername(loginReq.Username); err != nil {
-		return c.Status(400).JSON(fiber.Map{
-			"error": "Username format is invalid",
-		})
-	}
+	log.Printf("DEBUG: Mencoba login untuk username: '%s'", req.Username)
 
-	if loginReq.Password == "" {
-		return c.Status(400).JSON(fiber.Map{
-			"error": "Password is required",
-		})
-	}
+	// --- PERBAIKAN: Gunakan context dengan timeout ---
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	// ---------------------------------------------
 
-	// Find user in database
 	collection := config.GetCollection("users")
 	var user models.User
-	err := collection.FindOne(context.Background(), bson.M{"username": loginReq.Username}).Decode(&user)
+
+	// Gunakan 'ctx' yang baru
+	err := collection.FindOne(ctx, bson.M{"username": req.Username}).Decode(&user)
+
 	if err != nil {
+		log.Printf("DEBUG: Error saat FindOne: %v", err) // Log ini sekarang HARUS muncul jika ada error
+
 		if err == mongo.ErrNoDocuments {
-			return c.Status(401).JSON(fiber.Map{
-				"error": "Username or password is incorrect",
-			})
+			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Invalid username or password (user not found)"})
 		}
-		return c.Status(500).JSON(fiber.Map{
-			"error": "Database error",
-		})
+		// Mengembalikan pesan error yang lebih spesifik jika bukan karena 'user not found'
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Database query failed", "details": err.Error()})
 	}
 
-	// Check if user is active
-	if !user.IsActive {
-		return c.Status(401).JSON(fiber.Map{
-			"error": "Account is deactivated",
-		})
+	log.Printf("DEBUG: User '%s' ditemukan di database.", user.Username)
+
+	if user.Provider != "local" {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "This account uses a social login. Please log in with Google."})
 	}
 
-	// Verify password
-	if !utils.CheckPasswordHash(loginReq.Password, user.Password) {
-		// Log failed login attempt
-		logActivity(user.ID, user.Username, "failed_login", c.IP(), c.Get("User-Agent"))
-		
-		return c.Status(401).JSON(fiber.Map{
-			"error": "Username or password is incorrect",
-		})
+	if !utils.CheckPasswordHash(req.Password, user.Password) {
+		log.Printf("DEBUG: Password untuk user '%s' TIDAK COCOK.", user.Username)
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Invalid username or password (password incorrect)"})
 	}
 
-	// Update last login
-	now := time.Now()
-	user.LastLogin = &now
-	collection.UpdateOne(
-		context.Background(),
-		bson.M{"_id": user.ID},
-		bson.M{"$set": bson.M{"last_login": now}},
-	)
-
-	// Generate JWT token
-	token, err := utils.GenerateJWT(user.Username, user.Role, user.ID.Hex())
-	if err != nil {
-		return c.Status(500).JSON(fiber.Map{
-			"error": "Failed to generate token",
-		})
-	}
-
-	// Log successful login
-	logActivity(user.ID, user.Username, "successful_login", c.IP(), c.Get("User-Agent"))
-
-	return c.JSON(models.LoginResponse{
-		Token: token,
-		User:  user,
-	})
+	log.Printf("DEBUG: Password cocok. Login berhasil untuk user '%s'.", user.Username)
+	return generateLoginResponse(c, user)
 }
 
+// ChangePassword untuk pengguna yang sedang login
 func ChangePassword(c *fiber.Ctx) error {
-	user := c.Locals("user").(*utils.Claims)
-	
-	var changeReq models.ChangePasswordRequest
-	if err := c.BodyParser(&changeReq); err != nil {
-		return c.Status(400).JSON(fiber.Map{
-			"error": "Invalid request format",
-		})
+	claims := c.Locals("user").(*utils.Claims)
+	userID, _ := primitive.ObjectIDFromHex(claims.UserID)
+
+	var req models.ChangePasswordRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request format"})
 	}
 
-	// Validate new password
-	if err := utils.ValidatePassword(changeReq.NewPassword); err != nil {
-		return c.Status(400).JSON(fiber.Map{
-			"error": err.Error(),
-		})
-	}
-
-	// Get user from database
 	collection := config.GetCollection("users")
-	userID, _ := primitive.ObjectIDFromHex(user.UserID)
-	var dbUser models.User
-	err := collection.FindOne(context.Background(), bson.M{"_id": userID}).Decode(&dbUser)
+	var user models.User
+	err := collection.FindOne(context.Background(), bson.M{"_id": userID}).Decode(&user)
 	if err != nil {
-		return c.Status(500).JSON(fiber.Map{
-			"error": "Database error",
-		})
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "User not found"})
 	}
 
-	// Verify old password
-	if !utils.CheckPasswordHash(changeReq.OldPassword, dbUser.Password) {
-		return c.Status(400).JSON(fiber.Map{
-			"error": "Current password is incorrect",
-		})
+	// Verifikasi password lama
+	if !utils.CheckPasswordHash(req.OldPassword, user.Password) {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Current password is incorrect"})
 	}
 
-	// Hash new password
-	hashedPassword, err := utils.HashPassword(changeReq.NewPassword)
+	// Hash password baru
+	hashedPassword, err := utils.HashPassword(req.NewPassword)
 	if err != nil {
-		return c.Status(500).JSON(fiber.Map{
-			"error": "Failed to hash password",
-		})
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to process new password"})
 	}
 
-	// Update password in database
-	_, err = collection.UpdateOne(
-		context.Background(),
-		bson.M{"_id": userID},
-		bson.M{"$set": bson.M{
+	// Update password di database dengan audit fields
+	update := bson.M{
+		"$set": bson.M{
 			"password":   hashedPassword,
-			"updated_at": time.Now(),
-		}},
-	)
+			"modifiedOn": time.Now(),
+			"modifiedBy": &userID,
+		},
+	}
+	_, err = collection.UpdateOne(context.Background(), bson.M{"_id": userID}, update)
 	if err != nil {
-		return c.Status(500).JSON(fiber.Map{
-			"error": "Failed to update password",
-		})
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to update password"})
 	}
 
-	// Log password change
-	logActivity(userID, user.Username, "password_changed", c.IP(), c.Get("User-Agent"))
-
-	return c.JSON(fiber.Map{
-		"message": "Password changed successfully",
-	})
+	return c.JSON(fiber.Map{"message": "Password changed successfully"})
 }
 
-func GetProfile(c *fiber.Ctx) error {
-	user := c.Locals("user").(*utils.Claims)
-	
-	collection := config.GetCollection("users")
-	userID, _ := primitive.ObjectIDFromHex(user.UserID)
-	var dbUser models.User
-	err := collection.FindOne(context.Background(), bson.M{"_id": userID}).Decode(&dbUser)
-	if err != nil {
-		return c.Status(500).JSON(fiber.Map{
-			"error": "Database error",
-		})
-	}
-
-	return c.JSON(dbUser)
-}
-
+// Logout (opsional, bisa digunakan untuk logging)
 func Logout(c *fiber.Ctx) error {
-	user := c.Locals("user").(*utils.Claims)
-	userID, _ := primitive.ObjectIDFromHex(user.UserID)
-	
-	// Log logout activity
-	logActivity(userID, user.Username, "logout", c.IP(), c.Get("User-Agent"))
-
-	return c.JSON(fiber.Map{
-		"message": "Logged out successfully",
-	})
-}
-
-// Helper function to log user activities
-func logActivity(userID primitive.ObjectID, username, action, ipAddress, userAgent string) {
-	collection := config.GetCollection("activity_logs")
-	log := models.ActivityLog{
-		UserID:    userID,
-		Username:  username,
-		Action:    action,
-		IPAddress: ipAddress,
-		UserAgent: userAgent,
-		Timestamp: time.Now(),
-	}
-	collection.InsertOne(context.Background(), log)
+	// Logout pada JWT biasanya ditangani oleh frontend dengan menghapus token.
+	// Endpoint ini bisa ada untuk tujuan logging jika diperlukan.
+	return c.JSON(fiber.Map{"message": "Logged out successfully"})
 }

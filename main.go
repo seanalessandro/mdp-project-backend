@@ -3,40 +3,40 @@ package main
 import (
 	"log"
 	"mdp-project-backend/config"
-	"mdp-project-backend/handlers"
-	"mdp-project-backend/middleware"
+	"mdp-project-backend/routes" // Import paket routes
+	"os"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v2/middleware/cors"
+	"github.com/gofiber/fiber/v2/middleware/logger"
+	"github.com/joho/godotenv"
 )
 
 func main() {
-	// Initialize database connection
-	config.ConnectDB()
+	// 1. Load environment variables dari .env
+	if err := godotenv.Load(); err != nil {
+		log.Println("Warning: No .env file found")
+	}
 
-	// Create Fiber app
+	// 2. Inisialisasi konfigurasi
+	config.ConnectDB()
+	config.SetupOAuth()
+
+	// 3. Buat aplikasi Fiber
 	app := fiber.New()
 
-	// Add CORS middleware
-	app.Use(middleware.CORS())
+	// 4. Tambahkan Middleware
+	app.Use(cors.New())   // Middleware untuk CORS
+	app.Use(logger.New()) // Middleware untuk logging request
 
-	// Public routes
-	app.Get("/", func(c *fiber.Ctx) error {
-		return c.Status(200).JSON(fiber.Map{
-			"message": "MDP Project Backend API",
-			"version": "1.0.0",
-		})
-	})
+	// 5. Setup Routes dari paket routes
+	routes.SetupRoutes(app)
 
-	// Auth routes
-	auth := app.Group("/api/auth")
-	auth.Post("/login", handlers.Login)
-
-	// Protected routes
-	api := app.Group("/api", middleware.AuthRequired())
-	api.Get("/profile", handlers.GetProfile)
-	api.Post("/change-password", handlers.ChangePassword)
-	api.Post("/logout", handlers.Logout)
-
-	log.Println("Server starting on port 3033...")
-	log.Fatal(app.Listen(":3033"))
+	// 6. Jalankan Server
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "3033"
+	}
+	log.Printf("Server starting on port %s...", port)
+	log.Fatal(app.Listen(":" + port))
 }

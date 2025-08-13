@@ -3,6 +3,7 @@ package config
 import (
 	"context"
 	"log"
+	"os"
 	"time"
 
 	"go.mongodb.org/mongo-driver/mongo"
@@ -12,27 +13,28 @@ import (
 var DB *mongo.Database
 
 func ConnectDB() {
-	// MongoDB connection string - replace with your actual connection string
-	mongoURI := "mongodb://localhost:27017" // Change this to your MongoDB URI
-	
-	client, err := mongo.Connect(context.TODO(), options.Client().ApplyURI(mongoURI))
-	if err != nil {
-		log.Fatal("Failed to connect to MongoDB:", err)
+	mongoURI := os.Getenv("MONGO_URI")
+	dbName := os.Getenv("MONGO_DATABASE")
+
+	if mongoURI == "" || dbName == "" {
+		log.Fatal("MONGO_URI and MONGO_DATABASE must be set in .env file")
 	}
 
-	// Test the connection
+	client, err := mongo.Connect(context.TODO(), options.Client().ApplyURI(mongoURI))
+	if err != nil {
+		log.Fatalf("Failed to connect to MongoDB: %v", err)
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	
+
 	err = client.Ping(ctx, nil)
 	if err != nil {
-		log.Fatal("Failed to ping MongoDB:", err)
+		log.Fatalf("Failed to ping MongoDB: %v", err)
 	}
 
 	log.Println("Connected to MongoDB successfully!")
-	
-	// Set the database - replace "mdp_project" with your database name
-	DB = client.Database("mdp_project")
+	DB = client.Database(dbName)
 }
 
 func GetCollection(collectionName string) *mongo.Collection {
