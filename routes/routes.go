@@ -49,4 +49,8 @@ func SetupRoutes(app *fiber.App) {
 	adminApi.Get("/roles/:id", handlers.GetRoleByID)   // Membaca satu role
 	adminApi.Put("/roles/:id", handlers.UpdateRole)    // FR-5.2.3: Mengedit role
 	adminApi.Delete("/roles/:id", handlers.DeleteRole) // FR-5.2.3: Menghapus role
+	adminApi.Patch("/roles/:id/status", handlers.ToggleRoleStatus)
+
+	adminApi.Get("/permissions", handlers.GetAllPermissions)
+
 }

@@ -23,8 +23,6 @@ func CreateRole(c *fiber.Ctx) error {
 	}
 
 	collection := config.GetCollection("roles")
-
-	// Cek duplikat nama
 	count, err := collection.CountDocuments(context.Background(), bson.M{"name": req.Name})
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Database error on checking name"})
@@ -46,15 +44,13 @@ func CreateRole(c *fiber.Ctx) error {
 		Description: req.Description,
 		Permissions: req.Permissions,
 		IsActive:    true,
-		IsDefault:   false, // Role yang dibuat manual tidak default
+		IsDefault:   false,
 	}
 
 	_, err = collection.InsertOne(context.Background(), newRole)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to create role"})
 	}
-
-	// TODO: Log activity
 	return c.Status(fiber.StatusCreated).JSON(newRole)
 }
 
@@ -70,7 +66,6 @@ func GetAllRoles(c *fiber.Ctx) error {
 	if err = cursor.All(context.Background(), &roles); err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to decode roles"})
 	}
-
 	return c.JSON(roles)
 }
 
@@ -87,7 +82,6 @@ func GetRoleByID(c *fiber.Ctx) error {
 	if err != nil {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Role not found"})
 	}
-
 	return c.JSON(role)
 }
 
@@ -121,15 +115,12 @@ func UpdateRole(c *fiber.Ctx) error {
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to update role"})
 	}
-
 	return c.JSON(fiber.Map{"message": "Role updated successfully"})
 }
 
 // DeleteRole menghapus (soft delete) sebuah role
+// Ganti fungsi DeleteRole yang lama dengan ini
 func DeleteRole(c *fiber.Ctx) error {
-	claims := c.Locals("user").(*utils.Claims)
-	adminID, _ := primitive.ObjectIDFromHex(claims.UserID)
-
 	id, err := primitive.ObjectIDFromHex(c.Params("id"))
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid role ID format"})
@@ -148,10 +139,65 @@ func DeleteRole(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Role default tidak dapat dihapus."})
 	}
 
-	// Lakukan soft delete dengan menonaktifkan role
+	// --- PERUBAHAN: Gunakan DeleteOne untuk menghapus permanen ---
+	result, err := collection.DeleteOne(context.Background(), bson.M{"_id": id})
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to delete role"})
+	}
+
+	if result.DeletedCount == 0 {
+		return c.Status(404).JSON(fiber.Map{"error": "Role not found for deletion"})
+	}
+
+	return c.JSON(fiber.Map{"message": "Role deleted successfully"})
+}
+
+// --- FUNGSI BARU YANG DIPERBAIKI ---
+// GetAllPermissions sekarang mengambil data dari collection 'permissions'
+func GetAllPermissions(c *fiber.Ctx) error {
+	collection := config.GetCollection("permissions")
+
+	cursor, err := collection.Find(context.Background(), bson.M{})
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to fetch permissions"})
+	}
+
+	var results []bson.M
+	if err = cursor.All(context.Background(), &results); err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to decode permissions"})
+	}
+
+	// Ekstrak hanya field 'name' untuk dikirim ke frontend
+	var permissionNames []string
+	for _, doc := range results {
+		if name, ok := doc["name"].(string); ok {
+			permissionNames = append(permissionNames, name)
+		}
+	}
+
+	return c.JSON(permissionNames)
+}
+
+func ToggleRoleStatus(c *fiber.Ctx) error {
+	claims := c.Locals("user").(*utils.Claims)
+	adminID, _ := primitive.ObjectIDFromHex(claims.UserID)
+
+	id, err := primitive.ObjectIDFromHex(c.Params("id"))
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid role ID format"})
+	}
+
+	var body struct {
+		IsActive bool `json:"isActive"`
+	}
+	if err := c.BodyParser(&body); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request body"})
+	}
+
+	collection := config.GetCollection("roles")
 	update := bson.M{
 		"$set": bson.M{
-			"isActive":   false,
+			"isActive":   body.IsActive,
 			"modifiedOn": time.Now(),
 			"modifiedBy": &adminID,
 		},
@@ -159,8 +205,8 @@ func DeleteRole(c *fiber.Ctx) error {
 
 	_, err = collection.UpdateOne(context.Background(), bson.M{"_id": id}, update)
 	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to delete role"})
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to update role status"})
 	}
 
-	return c.JSON(fiber.Map{"message": "Role deactivated successfully"})
+	return c.JSON(fiber.Map{"message": "Role status updated successfully"})
 }
