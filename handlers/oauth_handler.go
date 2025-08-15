@@ -68,7 +68,7 @@ func GoogleCallback(c *fiber.Ctx) error {
 		roleCollection := config.GetCollection("roles")
 		var defaultRole models.Role
 		// Pastikan role 'viewer' (huruf kecil) ada di database Anda
-		err := roleCollection.FindOne(context.Background(), bson.M{"name": "viewer"}).Decode(&defaultRole)
+		err := roleCollection.FindOne(context.Background(), bson.M{"name": "Viewer"}).Decode(&defaultRole)
 		if err != nil {
 			log.Printf("FATAL: Default role 'viewer' not found in database.")
 			return c.Status(http.StatusInternalServerError).SendString("Server is not configured correctly, default role missing.")
