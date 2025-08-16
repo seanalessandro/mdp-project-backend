@@ -53,4 +53,20 @@ func SetupRoutes(app *fiber.App) {
 
 	adminApi.Get("/permissions", handlers.GetAllPermissions)
 
+	// CRUD Dokumen
+	api.Post("/documents", handlers.CreateDocument)
+	api.Get("/documents/:id", handlers.GetDocumentByID)
+	api.Put("/documents/:id", handlers.UpdateDocument)
+	api.Get("/documents", handlers.GetMyDocuments)
+	api.Delete("/documents/:id", handlers.DeleteDocument)
+	api.Post("/upload/image", handlers.UploadImage)
+
+	// --- TAMBAHKAN ROUTE KOMENTAR DI SINI ---
+	docs := api.Group("/documents", middleware.Protected())
+	docs.Get("/:id/comments", handlers.GetCommentsForDocument)
+	docs.Post("/:id/comments", handlers.CreateComment)
+
+	// Route untuk balasan, mungkin perlu grup terpisah
+	comments := api.Group("/comments", middleware.Protected())
+	comments.Post("/:commentId/replies", handlers.CreateReply)
 }
