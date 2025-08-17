@@ -10,6 +10,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/mongo"
 )
 
 // GetCommentsForDocument mengambil semua komentar untuk sebuah dokumen
@@ -20,12 +21,59 @@ func GetCommentsForDocument(c *fiber.Ctx) error {
 	}
 
 	collection := config.GetCollection("comments")
-	cursor, err := collection.Find(context.Background(), bson.M{"documentId": docID})
+
+	pipeline := mongo.Pipeline{
+		{{"$match", bson.M{"documentId": docID}}},
+		{{"$sort", bson.D{{"createdOn", -1}}}},
+		{{"$lookup", bson.D{
+			{"from", "users"},
+			{"localField", "authorId"},
+			{"foreignField", "_id"},
+			{"as", "author"},
+		}}},
+		{{"$unwind", bson.D{{"path", "$author"}, {"preserveNullAndEmptyArrays", true}}}},
+		{{"$lookup", bson.D{
+			{"from", "users"},
+			{"localField", "replies.authorId"},
+			{"foreignField", "_id"},
+			{"as", "replyAuthors"},
+		}}},
+		{{"$addFields", bson.D{
+			{"replies", bson.D{
+				{"$map", bson.D{
+					{"input", "$replies"},
+					{"as", "reply"},
+					{"in", bson.D{
+						{"$mergeObjects", bson.A{
+							"$$reply",
+							bson.D{{"author", bson.D{
+								{"$arrayElemAt", bson.A{
+									bson.D{{"$filter", bson.D{
+										{"input", "$replyAuthors"},
+										{"as", "author"},
+										{"cond", bson.D{{"$eq", bson.A{"$$author._id", "$$reply.authorId"}}}},
+									}}},
+									0,
+								}},
+							}}},
+						}},
+					}},
+				}},
+			}},
+		}}},
+		{{"$project", bson.D{
+			{"replyAuthors", 0},
+			{"author.password", 0}, // Jangan kirim password user ke frontend
+			{"author.roleId", 0},
+		}}},
+	}
+
+	cursor, err := collection.Aggregate(context.Background(), pipeline)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to fetch comments"})
 	}
 
-	var comments []models.Comment
+	var comments []bson.M
 	if err = cursor.All(context.Background(), &comments); err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to decode comments"})
 	}
@@ -104,9 +152,12 @@ func CreateReply(c *fiber.Ctx) error {
 		"$set":  bson.M{"modifiedOn": time.Now(), "modifiedBy": &authorID},
 	}
 
-	_, err = collection.UpdateOne(context.Background(), bson.M{"_id": commentID}, update)
+	result, err := collection.UpdateOne(context.Background(), bson.M{"_id": commentID}, update)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to add reply"})
+	}
+	if result.ModifiedCount == 0 {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Comment not found"})
 	}
 
 	return c.Status(fiber.StatusCreated).JSON(newReply)
