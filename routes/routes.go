@@ -58,7 +58,7 @@ func SetupRoutes(app *fiber.App) {
 	docs.Post("/", handlers.CreateDocument)
 	docs.Get("/", handlers.GetMyDocuments)
 	docs.Get("/:id", handlers.GetDocumentByID)
-	docs.Put("/:id", handlers.UpdateDocument)
+	docs.Patch("/:id/status", handlers.UpdateDocumentStatus)
 	docs.Delete("/:id", handlers.DeleteDocument)
 	docs.Get("/:id/comments", handlers.GetCommentsForDocument)
 	docs.Post("/:id/comments", handlers.CreateComment)

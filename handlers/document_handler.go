@@ -89,39 +89,36 @@ func GetMyDocuments(c *fiber.Ctx) error {
 }
 
 // UpdateDocument menyimpan perubahan pada dokumen
-func UpdateDocument(c *fiber.Ctx) error {
+func UpdateDocumentStatus(c *fiber.Ctx) error {
 	claims := c.Locals("user").(*utils.Claims)
 	modifierID, _ := primitive.ObjectIDFromHex(claims.UserID)
-
 	docID, err := primitive.ObjectIDFromHex(c.Params("id"))
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid document ID"})
 	}
 
 	var body struct {
-		Title   string `json:"title"`
-		Content string `json:"content"`
+		Status string `json:"status"`
 	}
-	if err := c.BodyParser(&body); err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request body"})
+	if err := c.BodyParser(&body); err != nil || body.Status == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request body, 'status' is required"})
 	}
 
-	collection := config.GetCollection("documents")
 	update := bson.M{
 		"$set": bson.M{
-			"title":      body.Title,
-			"content":    body.Content,
+			"status":     body.Status,
 			"modifiedOn": time.Now(),
 			"modifiedBy": &modifierID,
 		},
 	}
 
+	collection := config.GetCollection("documents")
 	_, err = collection.UpdateOne(context.Background(), bson.M{"_id": docID}, update)
 	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to update document"})
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to update document status"})
 	}
 
-	return c.SendStatus(fiber.StatusNoContent) // 204 No Content adalah respons yang baik untuk update
+	return c.Status(fiber.StatusOK).JSON(fiber.Map{"message": "Document status updated successfully"})
 }
 
 // DeleteDocument menghapus dokumen

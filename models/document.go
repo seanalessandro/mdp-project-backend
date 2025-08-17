@@ -10,4 +10,5 @@ type Document struct {
 	Title     string                          `json:"title" bson:"title"`     // Judul dokumen
 	Content   string                          `json:"content" bson:"content"` // Konten dokumen dalam format JSON string dari Lexical
 	OwnerID   primitive.ObjectID              `json:"ownerId" bson:"ownerId"` // ID pengguna yang memiliki dokumen
+	Status    string                          `json:"status" bson:"status"`
 }
