@@ -13,89 +13,27 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 )
 
-// GetCommentsForDocument mengambil semua komentar untuk sebuah dokumen
-func GetCommentsForDocument(c *fiber.Ctx) error {
-	docID, err := primitive.ObjectIDFromHex(c.Params("id"))
-	if err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid document ID"})
-	}
-
-	collection := config.GetCollection("comments")
-
-	pipeline := mongo.Pipeline{
-		{{"$match", bson.M{"documentId": docID}}},
-		{{"$sort", bson.D{{"createdOn", -1}}}},
-		{{"$lookup", bson.D{
-			{"from", "users"},
-			{"localField", "authorId"},
-			{"foreignField", "_id"},
-			{"as", "author"},
-		}}},
-		{{"$unwind", bson.D{{"path", "$author"}, {"preserveNullAndEmptyArrays", true}}}},
-		{{"$lookup", bson.D{
-			{"from", "users"},
-			{"localField", "replies.authorId"},
-			{"foreignField", "_id"},
-			{"as", "replyAuthors"},
-		}}},
-		{{"$addFields", bson.D{
-			{"replies", bson.D{
-				{"$map", bson.D{
-					{"input", "$replies"},
-					{"as", "reply"},
-					{"in", bson.D{
-						{"$mergeObjects", bson.A{
-							"$$reply",
-							bson.D{{"author", bson.D{
-								{"$arrayElemAt", bson.A{
-									bson.D{{"$filter", bson.D{
-										{"input", "$replyAuthors"},
-										{"as", "author"},
-										{"cond", bson.D{{"$eq", bson.A{"$$author._id", "$$reply.authorId"}}}},
-									}}},
-									0,
-								}},
-							}}},
-						}},
-					}},
-				}},
-			}},
-		}}},
-		{{"$project", bson.D{
-			{"replyAuthors", 0},
-			{"author.password", 0}, // Jangan kirim password user ke frontend
-			{"author.roleId", 0},
-		}}},
-	}
-
-	cursor, err := collection.Aggregate(context.Background(), pipeline)
-	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to fetch comments"})
-	}
-
-	var comments []bson.M
-	if err = cursor.All(context.Background(), &comments); err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to decode comments"})
-	}
-
-	return c.JSON(comments)
-}
-
-// CreateComment membuat komentar baru
+// CreateComment sekarang menangani komentar utama dan semua level balasan
 func CreateComment(c *fiber.Ctx) error {
 	claims := c.Locals("user").(*utils.Claims)
 	authorID, _ := primitive.ObjectIDFromHex(claims.UserID)
 	docID, err := primitive.ObjectIDFromHex(c.Params("id"))
 	if err != nil {
+		// Jika tidak ada docID di params, ini mungkin adalah balasan yang dikirim ke endpoint lain
+		// Kita akan tangani ini nanti di route terpisah jika diperlukan
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid document ID"})
 	}
 
 	var body struct {
-		Content    string `json:"content"`
-		MarkedText string `json:"markedText"`
+		Content  string `json:"content"`
+		ParentID string `json:"parentId"` // Terima parentId (opsional)
 	}
 	if err := c.BodyParser(&body); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request body"})
+	}
+
+	if body.Content == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Comment content cannot be empty"})
 	}
 
 	now := time.Now()
@@ -110,8 +48,14 @@ func CreateComment(c *fiber.Ctx) error {
 		DocumentID: docID,
 		AuthorID:   authorID,
 		Content:    body.Content,
-		MarkedText: body.MarkedText,
-		Replies:    []models.Reply{},
+	}
+
+	// Jika ada ParentID yang valid, set sebagai balasan
+	if body.ParentID != "" {
+		parentID, err := primitive.ObjectIDFromHex(body.ParentID)
+		if err == nil {
+			newComment.ParentID = &parentID
+		}
 	}
 
 	collection := config.GetCollection("comments")
@@ -120,45 +64,69 @@ func CreateComment(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to create comment"})
 	}
 
-	return c.Status(fiber.StatusCreated).JSON(newComment)
+	// Ambil kembali data yang baru saja di-insert beserta info author untuk dikirim ke frontend
+	pipeline := mongo.Pipeline{
+		{{"$match", bson.M{"_id": newComment.ID}}},
+		{{"$lookup", bson.D{
+			{"from", "users"},
+			{"localField", "authorId"},
+			{"foreignField", "_id"},
+			{"as", "author"},
+		}}},
+		{{"$unwind", "$author"}},
+	}
+
+	cursor, err := collection.Aggregate(context.Background(), pipeline)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to retrieve created comment"})
+	}
+	var createdCommentWithAuthor []bson.M
+	if err = cursor.All(context.Background(), &createdCommentWithAuthor); err != nil || len(createdCommentWithAuthor) == 0 {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to decode created comment"})
+	}
+
+	return c.Status(fiber.StatusCreated).JSON(createdCommentWithAuthor[0])
 }
 
-// CreateReply menambahkan balasan ke komentar
-func CreateReply(c *fiber.Ctx) error {
-	claims := c.Locals("user").(*utils.Claims)
-	authorID, _ := primitive.ObjectIDFromHex(claims.UserID)
-	commentID, err := primitive.ObjectIDFromHex(c.Params("commentId"))
+// GetCommentsForDocument mengambil SEMUA komentar (termasuk balasan) sebagai daftar datar
+func GetCommentsForDocument(c *fiber.Ctx) error {
+	docID, err := primitive.ObjectIDFromHex(c.Params("id"))
 	if err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid comment ID"})
-	}
-
-	var body struct {
-		Content string `json:"content"`
-	}
-	if err := c.BodyParser(&body); err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request body"})
-	}
-
-	newReply := models.Reply{
-		ID:        primitive.NewObjectID(),
-		AuthorID:  authorID,
-		Content:   body.Content,
-		CreatedAt: time.Now(),
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid document ID"})
 	}
 
 	collection := config.GetCollection("comments")
-	update := bson.M{
-		"$push": bson.M{"replies": newReply},
-		"$set":  bson.M{"modifiedOn": time.Now(), "modifiedBy": &authorID},
+	pipeline := mongo.Pipeline{
+		{{"$match", bson.M{"documentId": docID}}},
+		{{"$lookup", bson.D{
+			{"from", "users"},
+			{"localField", "authorId"},
+			{"foreignField", "_id"},
+			{"as", "author"},
+		}}},
+		{{"$unwind", bson.D{{"path", "$author"}, {"preserveNullAndEmptyArrays", true}}}},
+		{{"$sort", bson.D{{"createdOn", 1}}}}, // Diurutkan dari terlama ke terbaru
+		{{"$project", bson.D{
+			{"author.password", 0}, // Pastikan tidak mengirim password
+			{"author.roleId", 0},
+		}}},
 	}
 
-	result, err := collection.UpdateOne(context.Background(), bson.M{"_id": commentID}, update)
+	cursor, err := collection.Aggregate(context.Background(), pipeline)
 	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to add reply"})
-	}
-	if result.ModifiedCount == 0 {
-		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Comment not found"})
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to fetch comments"})
 	}
 
-	return c.Status(fiber.StatusCreated).JSON(newReply)
+	var comments []bson.M
+	if err = cursor.All(context.Background(), &comments); err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to decode comments"})
+	}
+
+	if comments == nil {
+		return c.JSON([]models.Comment{})
+	}
+
+	return c.JSON(comments)
 }
+
+// Handler CreateReply tidak diperlukan lagi, karena sudah ditangani oleh CreateComment
