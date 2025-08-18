@@ -12,8 +12,7 @@ import (
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
-// CreateDocument membuat dokumen baru yang kosong
-
+// CreateDocument membuat dokumen baru, bisa dari template atau kosong
 func CreateDocument(c *fiber.Ctx) error {
 	claims := c.Locals("user").(*utils.Claims)
 	ownerID, _ := primitive.ObjectIDFromHex(claims.UserID)
@@ -22,6 +21,7 @@ func CreateDocument(c *fiber.Ctx) error {
 		Title    string `json:"title"`
 		DocNo    string `json:"docNo"`
 		Priority string `json:"priority"`
+		Content  string `json:"content"` // Menerima konten opsional dari template
 	}
 	if err := c.BodyParser(&body); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request body"})
@@ -30,8 +30,17 @@ func CreateDocument(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Title, DocNo, and Priority are required"})
 	}
 
-	now := time.Now()
+	// --- PERBAIKAN LOGIKA DI SINI ---
+	// 1. Deklarasikan initialContent dengan nilai default
 	initialContent := `{"type":"doc","content":[{"type":"paragraph"}]}`
+
+	// 2. Jika ada konten dari template, timpa nilainya
+	if body.Content != "" {
+		initialContent = body.Content
+	}
+	// ---------------------------------
+
+	now := time.Now()
 	newDocID := primitive.NewObjectID()
 
 	newDoc := models.Document{
@@ -43,7 +52,7 @@ func CreateDocument(c *fiber.Ctx) error {
 			ModifiedBy: &ownerID,
 		},
 		Title:    body.Title,
-		Content:  initialContent,
+		Content:  initialContent, // Gunakan variabel yang sudah benar
 		OwnerID:  ownerID,
 		Status:   "Draft",
 		DocNo:    body.DocNo,
@@ -57,15 +66,12 @@ func CreateDocument(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to create document"})
 	}
 
-	// --- PERBAIKAN DI SINI ---
-	// Jangan langsung kembalikan 'newDoc'. Ambil data yang baru dibuat dari database.
 	var createdDoc models.Document
 	err = collection.FindOne(context.Background(), bson.M{"_id": newDocID}).Decode(&createdDoc)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to retrieve created document"})
 	}
 
-	// Kembalikan 'createdDoc' yang datanya sudah pasti dari database
 	return c.Status(fiber.StatusCreated).JSON(createdDoc)
 }
 
@@ -75,7 +81,6 @@ func GetDocumentByID(c *fiber.Ctx) error {
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid document ID"})
 	}
-	// TODO: Tambahkan pengecekan hak akses (apakah user ini boleh melihat dokumen ini)
 
 	collection := config.GetCollection("documents")
 	var doc models.Document
@@ -107,7 +112,7 @@ func GetMyDocuments(c *fiber.Ctx) error {
 	return c.JSON(documents)
 }
 
-// UpdateDocument menyimpan perubahan pada judul dan konten dokumen
+// UpdateDocument menyimpan perubahan pada judul, konten, dan nomor dokumen
 func UpdateDocument(c *fiber.Ctx) error {
 	claims := c.Locals("user").(*utils.Claims)
 	modifierID, _ := primitive.ObjectIDFromHex(claims.UserID)
@@ -117,23 +122,25 @@ func UpdateDocument(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid document ID"})
 	}
 
-	// --- PERBAIKAN 1: Tambahkan DocNo ke body request ---
+	// --- PERBAIKAN 1: Tambahkan Priority ke body request ---
 	var body struct {
-		Title   string `json:"title"`
-		Content string `json:"content"`
-		DocNo   string `json:"docNo"` // Tambahkan ini
+		Title    string `json:"title"`
+		Content  string `json:"content"`
+		DocNo    string `json:"docNo"`
+		Priority string `json:"priority"` // Tambahkan ini
 	}
 	if err := c.BodyParser(&body); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request body"})
 	}
 
 	collection := config.GetCollection("documents")
-	// --- PERBAIKAN 2: Tambahkan DocNo ke BSON update ---
+	// --- PERBAIKAN 2: Tambahkan Priority ke BSON update ---
 	update := bson.M{
 		"$set": bson.M{
 			"title":      body.Title,
 			"content":    body.Content,
-			"docNo":      body.DocNo, // Tambahkan ini
+			"docNo":      body.DocNo,
+			"priority":   body.Priority, // Tambahkan ini
 			"modifiedOn": time.Now(),
 			"modifiedBy": &modifierID,
 		},
@@ -147,7 +154,7 @@ func UpdateDocument(c *fiber.Ctx) error {
 	return c.SendStatus(fiber.StatusNoContent)
 }
 
-// UpdateDocument menyimpan perubahan pada dokumen
+// UpdateDocumentStatus hanya mengubah status dokumen
 func UpdateDocumentStatus(c *fiber.Ctx) error {
 	claims := c.Locals("user").(*utils.Claims)
 	modifierID, _ := primitive.ObjectIDFromHex(claims.UserID)

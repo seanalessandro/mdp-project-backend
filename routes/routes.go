@@ -64,7 +64,6 @@ func SetupRoutes(app *fiber.App) {
 	docs.Get("/:id/comments", handlers.GetCommentsForDocument)
 	docs.Post("/:id/comments", handlers.CreateComment)
 	api.Post("/upload/image", middleware.AuthRequired(), handlers.UploadImage)
-	// comments := api.Group("/comments", middleware.AuthRequired())
-	// comments.Post("/:commentId/replies", handlers.CreateReply)
+	api.Get("/templates", middleware.AuthRequired(), handlers.GetTemplates)
 
 }
