@@ -41,7 +41,16 @@ func SetupRoutes(app *fiber.App) {
 
 	// Contoh rute khusus Admin
 	adminApi := api.Group("/admin", middleware.RoleRequired("admin"))
-	adminApi.Post("/users", handlers.AdminCreateUser)
+
+	// User Management Routes - FR-5.2.2
+	adminApi.Get("/users", handlers.GetUsers)                              // Get all users with pagination/filtering
+	adminApi.Get("/users/:id", handlers.GetUser)                           // Get single user
+	adminApi.Post("/users", handlers.CreateUser)                           // FR-5.2.2.1: Create new user account
+	adminApi.Put("/users/:id", handlers.UpdateUser)                        // FR-5.2.2.3: Update user role/unit
+	adminApi.Patch("/users/:id/role", handlers.UpdateUserRole)             // FR-5.2.2.3: Update user role specifically
+	adminApi.Patch("/users/:id/status", handlers.UpdateUser)               // FR-5.2.2.2: Toggle user active/inactive status
+	adminApi.Post("/users/:id/reset-password", handlers.ResetUserPassword) // FR-5.2.2.5: Reset user password
+	// Note: FR-5.2.2.4 - No delete route as per requirement (only deactivate)
 
 	//CRUD Master Role
 	adminApi.Post("/roles", handlers.CreateRole)       // FR-5.2.1: Membuat role baru

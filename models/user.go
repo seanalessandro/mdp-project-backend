@@ -7,9 +7,11 @@ import (
 )
 
 type User struct {
-	Username string `json:"username" bson:"username,unique"`
-	Email    string `json:"email" bson:"email,unique"`
-	Password string `json:"-" bson:"password,omitempty"`
+	Username  string `json:"username" bson:"username,unique"`
+	Email     string `json:"email" bson:"email,unique"`
+	Password  string `json:"-" bson:"password,omitempty"`
+	FullName  string `json:"fullName" bson:"fullName"`
+	UnitKerja string `json:"unitKerja,omitempty" bson:"unitKerja,omitempty"`
 	// --- PERUBAHAN PENTING ---
 	RoleID primitive.ObjectID `json:"roleId" bson:"roleId"`
 	// --------------------------
@@ -34,10 +36,11 @@ type LoginRequest struct {
 }
 
 type AdminCreateUserRequest struct {
-	Username string `json:"username" validate:"required"`
-	Email    string `json:"email" validate:"required,email"`
-	Password string `json:"password" validate:"required,min=8"`
-	RoleID   string `json:"roleId" validate:"required"` // Diubah ke RoleID
+	Username  string `json:"username" validate:"required"`
+	Email     string `json:"email" validate:"required,email"`
+	FullName  string `json:"fullName" validate:"required"`
+	UnitKerja string `json:"unitKerja,omitempty"`
+	RoleID    string `json:"roleId" validate:"required"` // Diubah ke RoleID
 }
 
 type ChangePasswordRequest struct {

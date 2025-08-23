@@ -21,6 +21,7 @@ func main() {
 	// 2. Inisialisasi konfigurasi
 	config.ConnectDB()
 	config.SetupOAuth()
+	config.InitializeEmailService() // Initialize email service like @PostConstruct
 
 	// 3. Buat aplikasi Fiber
 	app := fiber.New()
@@ -28,7 +29,6 @@ func main() {
 	// 4. Tambahkan Middleware
 	app.Use(cors.New())   // Middleware untuk CORS
 	app.Use(logger.New()) // Middleware untuk logging request
-	app.Static("/", "./public")
 
 	// 5. Setup Routes dari paket routes
 	routes.SetupRoutes(app)

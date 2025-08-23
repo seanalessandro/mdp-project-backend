@@ -44,7 +44,9 @@ func AdminCreateUser(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid Role ID format"})
 	}
 
-	hashedPassword, err := utils.HashPassword(req.Password)
+	// Generate default password for admin-created users
+	defaultPassword := "password123" // You can make this configurable
+	hashedPassword, err := utils.HashPassword(defaultPassword)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to hash password"})
 	}
@@ -58,12 +60,14 @@ func AdminCreateUser(c *fiber.Ctx) error {
 			ModifiedOn: now,
 			ModifiedBy: &adminID,
 		},
-		Username: req.Username,
-		Email:    req.Email,
-		Password: hashedPassword,
-		RoleID:   roleID,
-		IsActive: true,
-		Provider: "local",
+		Username:  req.Username,
+		Email:     req.Email,
+		FullName:  req.FullName,
+		UnitKerja: req.UnitKerja,
+		Password:  hashedPassword,
+		RoleID:    roleID,
+		IsActive:  true,
+		Provider:  "local",
 	}
 
 	collection := config.GetCollection("users")
@@ -75,7 +79,12 @@ func AdminCreateUser(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to create user"})
 	}
 
-	return c.Status(fiber.StatusCreated).JSON(newUser)
+	// Return success response with default password info
+	return c.Status(fiber.StatusCreated).JSON(fiber.Map{
+		"message": "User created successfully",
+		"user":    newUser,
+		"note":    "Default password is 'password123'. User should change it after first login.",
+	})
 }
 
 // generateLoginResponse adalah fungsi helper yang sudah diperbaiki
