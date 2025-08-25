@@ -7,6 +7,7 @@ import (
 	"math/big"
 	"os"
 	"strconv"
+	"time"
 
 	"gopkg.in/gomail.v2"
 )
@@ -222,6 +223,236 @@ func (e *EmailService) SendPasswordResetEmail(toEmail, fullName, newPassword str
 
 	log.Printf("Password reset email sent successfully to %s", toEmail)
 	return nil
+}
+
+// SendDocumentStatusEmail sends notification when document status changes
+// Similar to notification emails in enterprise document management systems
+func (e *EmailService) SendDocumentStatusEmail(toEmail, authorName, documentTitle, status, reviewerName string) error {
+	m := gomail.NewMessage()
+
+	m.SetHeader("From", m.FormatAddress(e.FromEmail, e.FromName))
+	m.SetHeader("To", toEmail)
+	m.SetHeader("Subject", fmt.Sprintf("Document Status Update: %s", documentTitle))
+
+	// Determine status color and icon based on status
+	var statusColor, statusIcon, statusMessage string
+	switch status {
+	case "In Review", "in_review", "review":
+		statusColor = "#ffc107"
+		statusIcon = "👁️"
+		statusMessage = "Your document has been submitted for review and is now being evaluated by our review team."
+	case "Approved", "approved":
+		statusColor = "#28a745"
+		statusIcon = "✅"
+		statusMessage = "Congratulations! Your document has been approved and is now published."
+	case "Rejected", "rejected":
+		statusColor = "#dc3545"
+		statusIcon = "❌"
+		statusMessage = "Your document requires revisions. Please check the feedback and resubmit."
+	case "Draft", "draft":
+		statusColor = "#6c757d"
+		statusIcon = "📝"
+		statusMessage = "Your document has been saved as draft. You can continue editing when ready."
+	default:
+		statusColor = "#17a2b8"
+		statusIcon = "📄"
+		statusMessage = fmt.Sprintf("Your document status has been updated to: %s", status)
+	}
+
+	htmlBody := fmt.Sprintf(`
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Document Status Update - MDP System</title>
+</head>
+<body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+    <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
+        <div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; margin-bottom: 20px;">
+            <h1 style="color: #007bff; margin-bottom: 10px;">Document Status Update</h1>
+            <p style="font-size: 16px; margin-bottom: 0;">Your document status has been updated in the MDP System.</p>
+        </div>
+        
+        <div style="background-color: #ffffff; padding: 20px; border: 1px solid #dee2e6; border-radius: 8px;">
+            <h2 style="color: #333; margin-bottom: 15px;">Hello, %s</h2>
+            
+            <div style="background-color: #ffffff; border: 2px solid %s; padding: 20px; border-radius: 8px; margin: 20px 0;">
+                <div style="text-align: center; margin-bottom: 15px;">
+                    <span style="font-size: 48px;">%s</span>
+                </div>
+                <h3 style="color: %s; text-align: center; margin-bottom: 15px; font-size: 24px;">
+                    Status: %s
+                </h3>
+                <p style="text-align: center; font-size: 16px; color: #666; margin-bottom: 0;">
+                    %s
+                </p>
+            </div>
+            
+            <div style="background-color: #f8f9fa; padding: 15px; border-radius: 5px; margin: 20px 0;">
+                <h3 style="color: #333; margin-bottom: 10px;">📄 Document Details</h3>
+                <p><strong>Document Title:</strong> %s</p>
+                <p><strong>Author:</strong> %s</p>
+                <p><strong>Status:</strong> %s</p>
+                %s
+                <p><strong>Updated:</strong> %s</p>
+            </div>
+            
+            <div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid #dee2e6;">
+                <h3 style="color: #333;">Next Steps:</h3>
+                <ul style="color: #666;">
+                    %s
+                </ul>
+            </div>
+        </div>
+        
+        <div style="text-align: center; margin-top: 20px; color: #666; font-size: 14px;">
+            <p>You can view your document in the MDP System dashboard.</p>
+            <p>&copy; 2025 MDP System. All rights reserved.</p>
+        </div>
+    </div>
+</body>
+</html>`,
+		authorName,              // Hello, %s
+		statusColor,             // border color
+		statusIcon,              // status icon
+		statusColor,             // status text color  
+		status,                  // status text
+		statusMessage,           // status message
+		documentTitle,           // document title
+		authorName,              // author name
+		status,                  // status
+		getReviewerInfo(reviewerName), // reviewer info (conditional)
+		getCurrentTimestamp(),   // updated time
+		getNextStepsHTML(status), // next steps based on status
+	)
+
+	// Set email body
+	m.SetBody("text/html", htmlBody)
+
+	// Create text alternative
+	textBody := fmt.Sprintf(`
+Document Status Update - MDP System
+
+Hello %s,
+
+Your document status has been updated:
+
+Document Details:
+- Title: %s
+- Author: %s
+- Status: %s
+%s
+- Updated: %s
+
+%s
+
+You can view your document in the MDP System dashboard.
+
+© 2025 MDP System. All rights reserved.
+`,
+		authorName,
+		documentTitle,
+		authorName,
+		status,
+		getReviewerInfoText(reviewerName),
+		getCurrentTimestamp(),
+		getNextStepsText(status),
+	)
+
+	m.AddAlternative("text/plain", textBody)
+
+	// Create SMTP dialer
+	d := gomail.NewDialer(e.Host, e.Port, e.Username, e.Password)
+
+	// Send email
+	if err := d.DialAndSend(m); err != nil {
+		log.Printf("Failed to send document status email to %s: %v", toEmail, err)
+		return fmt.Errorf("failed to send document status email: %v", err)
+	}
+
+	log.Printf("Document status email sent successfully to %s (Document: %s, Status: %s)", toEmail, documentTitle, status)
+	return nil
+}
+
+// Helper function to get reviewer information for HTML
+func getReviewerInfo(reviewerName string) string {
+	if reviewerName != "" {
+		return fmt.Sprintf("<p><strong>Reviewer:</strong> %s</p>", reviewerName)
+	}
+	return ""
+}
+
+// Helper function to get reviewer information for text
+func getReviewerInfoText(reviewerName string) string {
+	if reviewerName != "" {
+		return fmt.Sprintf("- Reviewer: %s", reviewerName)
+	}
+	return ""
+}
+
+// Helper function to get current timestamp
+func getCurrentTimestamp() string {
+	return time.Now().Format("January 2, 2006 at 3:04 PM")
+}
+
+// Helper function to get next steps based on status for HTML
+func getNextStepsHTML(status string) string {
+	switch status {
+	case "In Review", "in_review", "review":
+		return `
+                    <li>Wait for reviewer feedback</li>
+                    <li>Check your dashboard regularly for updates</li>
+                    <li>Prepare for potential revisions based on feedback</li>`
+	case "Approved", "approved":
+		return `
+                    <li>Your document is now live and accessible</li>
+                    <li>Share the document link with stakeholders</li>
+                    <li>Monitor document usage and feedback</li>`
+	case "Rejected", "rejected":
+		return `
+                    <li>Review the feedback provided by the reviewer</li>
+                    <li>Make necessary revisions to your document</li>
+                    <li>Resubmit for review when ready</li>`
+	case "Draft", "draft":
+		return `
+                    <li>Continue editing your document</li>
+                    <li>Submit for review when complete</li>
+                    <li>Save your progress regularly</li>`
+	default:
+		return `
+                    <li>Check your dashboard for more details</li>
+                    <li>Contact support if you have questions</li>`
+	}
+}
+
+// Helper function to get next steps based on status for text
+func getNextStepsText(status string) string {
+	switch status {
+	case "In Review", "in_review", "review":
+		return `Next Steps:
+- Wait for reviewer feedback
+- Check your dashboard regularly for updates
+- Prepare for potential revisions based on feedback`
+	case "Approved", "approved":
+		return `Next Steps:
+- Your document is now live and accessible
+- Share the document link with stakeholders  
+- Monitor document usage and feedback`
+	case "Rejected", "rejected":
+		return `Next Steps:
+- Review the feedback provided by the reviewer
+- Make necessary revisions to your document
+- Resubmit for review when ready`
+	case "Draft", "draft":
+		return `Next Steps:
+- Continue editing your document
+- Submit for review when complete
+- Save your progress regularly`
+	default:
+		return `Next Steps:
+- Check your dashboard for more details
+- Contact support if you have questions`
+	}
 }
 
 // ValidateEmailConfig checks if email configuration is properly set

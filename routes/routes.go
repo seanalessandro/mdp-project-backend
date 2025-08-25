@@ -72,6 +72,11 @@ func SetupRoutes(app *fiber.App) {
 	docs.Delete("/:id", handlers.DeleteDocument)
 	docs.Get("/:id/comments", handlers.GetCommentsForDocument)
 	docs.Post("/:id/comments", handlers.CreateComment)
+	
+	// PDF Export Routes - FR-5.3.4: Export document to PDF
+	docs.Get("/:id/export/pdf", handlers.ExportDocumentToPDF)     // Download PDF
+	docs.Get("/:id/preview/pdf", handlers.GetDocumentPDFPreview) // Preview PDF inline
+	
 	api.Post("/upload/image", middleware.AuthRequired(), handlers.UploadImage)
 	api.Get("/templates", middleware.AuthRequired(), handlers.GetTemplates)
 	api.Get("/document-templates", handlers.GetDocumentTemplates)

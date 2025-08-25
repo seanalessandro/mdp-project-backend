@@ -196,7 +196,17 @@ func UpdateDocumentStatus(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request body"})
 	}
 
-	// Siapkan BSON dasar untuk update
+	collection := config.GetCollection("documents")
+
+	// First, get the current document to retrieve owner information
+	var currentDoc models.Document
+	err = collection.FindOne(context.Background(), bson.M{"_id": docID}).Decode(&currentDoc)
+	if err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Document not found"})
+	}
+
+	// Update the document status
+
 	update := bson.M{
 		"$set": bson.M{
 			"status":     body.Status,
@@ -218,13 +228,68 @@ func UpdateDocumentStatus(c *fiber.Ctx) error {
 	}
 
 	_, err = config.GetCollection("documents").UpdateOne(context.Background(), bson.M{"_id": docID}, update)
+
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to update document status"})
 	}
 
 	// Log activity
 	utils.LogActivity(modifierID, claims.Username, "update_document_status", c.IP(), string(c.Request().Header.UserAgent()), &docID)
-	return c.Status(fiber.StatusOK).JSON(fiber.Map{"message": "Document status updated successfully"})
+
+	// Send email notification to document owner
+	go func() {
+		// Get document owner details
+		userCollection := config.GetCollection("users")
+		var documentOwner models.User
+		err := userCollection.FindOne(context.Background(), bson.M{"_id": currentDoc.OwnerID}).Decode(&documentOwner)
+		if err != nil {
+			log.Printf("Failed to find document owner for email notification: %v", err)
+			return
+		}
+
+		// Get modifier (reviewer) details for additional context
+		var modifierUser models.User
+		modifierName := "System"
+		err = userCollection.FindOne(context.Background(), bson.M{"_id": modifierID}).Decode(&modifierUser)
+		if err == nil {
+			modifierName = modifierUser.FullName
+			if modifierName == "" {
+				modifierName = modifierUser.Username
+			}
+		}
+
+		// Send email notification using the email service
+		emailService := config.GetEmailService()
+		if emailService != nil && config.IsEmailServiceEnabled() {
+			err := emailService.SendDocumentStatusEmail(
+				documentOwner.Email,    // recipient email
+				documentOwner.FullName, // author name
+				currentDoc.Title,       // document title
+				body.Status,            // new status
+				modifierName,           // reviewer name
+			)
+			if err != nil {
+				log.Printf("Failed to send document status email to %s: %v", documentOwner.Email, err)
+			} else {
+				log.Printf("Document status email sent successfully to %s (Document: %s, Status: %s)",
+					documentOwner.Email, currentDoc.Title, body.Status)
+			}
+		} else {
+			log.Printf("Email service not available, status notification not sent for document: %s", currentDoc.Title)
+		}
+	}()
+
+	// return c.Status(fiber.StatusOK).JSON(fiber.Map{"message": "Document status updated successfully"})
+
+	return c.Status(fiber.StatusOK).JSON(fiber.Map{
+		"message": "Document status updated successfully",
+		"document": fiber.Map{
+			"id":     currentDoc.ID,
+			"title":  currentDoc.Title,
+			"status": body.Status,
+		},
+		"emailNotification": config.IsEmailServiceEnabled(),
+	})
 }
 
 // DeleteDocument menghapus dokumen
