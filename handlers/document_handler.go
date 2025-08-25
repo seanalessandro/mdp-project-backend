@@ -2,6 +2,8 @@ package handlers
 
 import (
 	"context"
+	"fmt"
+	"log"
 	"mdp-project-backend/config"
 	"mdp-project-backend/models"
 	"mdp-project-backend/utils"
@@ -10,6 +12,8 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 // CreateDocument membuat dokumen baru, bisa dari template atau kosong
@@ -18,27 +22,22 @@ func CreateDocument(c *fiber.Ctx) error {
 	ownerID, _ := primitive.ObjectIDFromHex(claims.UserID)
 
 	var body struct {
-		Title    string `json:"title"`
-		DocNo    string `json:"docNo"`
-		Priority string `json:"priority"`
-		Content  string `json:"content"` // Menerima konten opsional dari template
+		TemplateID string `json:"templateId"`
 	}
 	if err := c.BodyParser(&body); err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request body"})
-	}
-	if body.Title == "" || body.DocNo == "" || body.Priority == "" {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Title, DocNo, and Priority are required"})
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request"})
 	}
 
-	// --- PERBAIKAN LOGIKA DI SINI ---
-	// 1. Deklarasikan initialContent dengan nilai default
-	initialContent := `{"type":"doc","content":[{"type":"paragraph"}]}`
-
-	// 2. Jika ada konten dari template, timpa nilainya
-	if body.Content != "" {
-		initialContent = body.Content
+	templateID, err := primitive.ObjectIDFromHex(body.TemplateID)
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid template ID"})
 	}
-	// ---------------------------------
+
+	var template models.DocumentTemplate
+	err = config.GetCollection("document_templates").FindOne(context.Background(), bson.M{"_id": templateID}).Decode(&template)
+	if err != nil {
+		return c.Status(404).JSON(fiber.Map{"error": "Template not found"})
+	}
 
 	now := time.Now()
 	newDocID := primitive.NewObjectID()
@@ -51,28 +50,27 @@ func CreateDocument(c *fiber.Ctx) error {
 			ModifiedOn: now,
 			ModifiedBy: &ownerID,
 		},
-		Title:    body.Title,
-		Content:  initialContent, // Gunakan variabel yang sudah benar
-		OwnerID:  ownerID,
+		DocNo:    fmt.Sprintf("BRD-%s", newDocID.Hex()[:6]),
+		Title:    "Untitled " + template.Name,
 		Status:   "Draft",
-		DocNo:    body.DocNo,
-		Version:  "1.0",
-		Priority: body.Priority,
+		Priority: "Medium",
+		Version:  1.0,
+		Content:  template.Content,
+		OwnerID:  ownerID,
 	}
 
-	collection := config.GetCollection("documents")
-	_, err := collection.InsertOne(context.Background(), newDoc)
+	_, err = config.GetCollection("documents").InsertOne(context.Background(), newDoc)
 	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to create document"})
+		if mongo.IsDuplicateKeyError(err) {
+			return c.Status(400).JSON(fiber.Map{"error": "Gagal membuat dokumen, ID duplikat."})
+		}
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to create document"})
 	}
 
-	var createdDoc models.Document
-	err = collection.FindOne(context.Background(), bson.M{"_id": newDocID}).Decode(&createdDoc)
-	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to retrieve created document"})
-	}
+	logAction := fmt.Sprintf("Membuat dokumen versi %.1f", newDoc.Version)
+	utils.LogActivity(ownerID, claims.Username, logAction, c.IP(), string(c.Request().Header.UserAgent()), &newDoc.ID)
 
-	return c.Status(fiber.StatusCreated).JSON(createdDoc)
+	return c.Status(fiber.StatusCreated).JSON(newDoc)
 }
 
 // GetDocumentByID mengambil satu dokumen
@@ -151,7 +149,35 @@ func UpdateDocument(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to update document"})
 	}
 
+	// Log activity
+	utils.LogActivity(modifierID, claims.Username, "update_document", c.IP(), string(c.Request().Header.UserAgent()), &docID)
+
 	return c.SendStatus(fiber.StatusNoContent)
+}
+
+func helperCreateVersion(docID primitive.ObjectID, changeDesc string) error {
+	docCollection := config.GetCollection("documents")
+	versionCollection := config.GetCollection("document_versions")
+
+	// 1. Ambil dokumen terkini
+	var currentDoc models.Document
+	err := docCollection.FindOne(context.Background(), bson.M{"_id": docID}).Decode(&currentDoc)
+	if err != nil {
+		return err
+	}
+
+	// 2. Buat objek versi baru
+	newVersion := models.DocumentVersion{
+		BaseModel:         models.BaseModel{ID: primitive.NewObjectID(), CreatedOn: time.Now(), CreatedBy: currentDoc.BaseModel.ModifiedBy},
+		DocumentID:        currentDoc.ID,
+		Version:           currentDoc.Version,
+		Content:           currentDoc.Content,
+		ChangeDescription: changeDesc,
+	}
+
+	// 3. Simpan versi baru
+	_, err = versionCollection.InsertOne(context.Background(), newVersion)
+	return err
 }
 
 // UpdateDocumentStatus hanya mengubah status dokumen
@@ -167,9 +193,10 @@ func UpdateDocumentStatus(c *fiber.Ctx) error {
 		Status string `json:"status"`
 	}
 	if err := c.BodyParser(&body); err != nil || body.Status == "" {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request body, 'status' is required"})
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request body"})
 	}
 
+	// Siapkan BSON dasar untuk update
 	update := bson.M{
 		"$set": bson.M{
 			"status":     body.Status,
@@ -178,12 +205,25 @@ func UpdateDocumentStatus(c *fiber.Ctx) error {
 		},
 	}
 
-	collection := config.GetCollection("documents")
-	_, err = collection.UpdateOne(context.Background(), bson.M{"_id": docID}, update)
+	// Pemicu: saat status diubah menjadi In Review atau Approved
+	if body.Status == "In Review" || body.Status == "Approved" {
+		// Panggil helper untuk membuat snapshot versi
+		err := helperCreateVersion(docID, "Status changed to "+body.Status)
+		if err != nil {
+			log.Printf("Failed to create document version: %v", err)
+		} else {
+			// Jika snapshot berhasil dibuat, tambahkan operasi $inc ke BSON update
+			update["$inc"] = bson.M{"version": 1.0}
+		}
+	}
+
+	_, err = config.GetCollection("documents").UpdateOne(context.Background(), bson.M{"_id": docID}, update)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to update document status"})
 	}
 
+	// Log activity
+	utils.LogActivity(modifierID, claims.Username, "update_document_status", c.IP(), string(c.Request().Header.UserAgent()), &docID)
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{"message": "Document status updated successfully"})
 }
 
@@ -205,4 +245,43 @@ func DeleteDocument(c *fiber.Ctx) error {
 	}
 
 	return c.SendStatus(fiber.StatusNoContent)
+}
+
+func GetDocumentTemplates(c *fiber.Ctx) error {
+	collection := config.GetCollection("document_templates")
+
+	cursor, err := collection.Find(context.Background(), bson.M{})
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to fetch templates"})
+	}
+
+	var templates []models.DocumentTemplate
+	if err = cursor.All(context.Background(), &templates); err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to decode templates"})
+	}
+
+	return c.JSON(templates)
+}
+
+func GetDocumentHistory(c *fiber.Ctx) error {
+	docID, err := primitive.ObjectIDFromHex(c.Params("id"))
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid document ID"})
+	}
+
+	collection := config.GetCollection("activity_logs")
+	filter := bson.M{"documentId": docID}
+	opts := options.Find().SetSort(bson.D{{Key: "timestamp", Value: 1}}) // Urutkan dari terlama
+
+	cursor, err := collection.Find(context.Background(), filter, opts)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to fetch history"})
+	}
+
+	var logs []models.ActivityLog
+	if err = cursor.All(context.Background(), &logs); err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to decode history"})
+	}
+
+	return c.JSON(logs)
 }

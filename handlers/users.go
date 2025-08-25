@@ -270,9 +270,6 @@ func CreateUser(c *fiber.Ctx) error {
 	}
 
 	// Log activity
-	if userObjectID, err := primitive.ObjectIDFromHex(user.UserID); err == nil {
-		utils.LogActivity(userObjectID, user.Username, "create_user", c.IP(), c.Get("User-Agent"))
-	}
 
 	// Remove password from response
 	newUser.Password = ""
@@ -353,9 +350,6 @@ func UpdateUser(c *fiber.Ctx) error {
 	}
 
 	// Log activity
-	if userObjectID, err := primitive.ObjectIDFromHex(user.UserID); err == nil {
-		utils.LogActivity(userObjectID, user.Username, "update_user", c.IP(), c.Get("User-Agent"))
-	}
 
 	// Get updated user
 	var updatedUser models.User
@@ -431,9 +425,6 @@ func DeleteUser(c *fiber.Ctx) error {
 	}
 
 	// Log activity
-	if userObjectID, err := primitive.ObjectIDFromHex(user.UserID); err == nil {
-		utils.LogActivity(userObjectID, user.Username, "delete_user", c.IP(), c.Get("User-Agent"))
-	}
 
 	return c.JSON(fiber.Map{
 		"message": "User deleted successfully",
@@ -512,11 +503,6 @@ func ResetUserPassword(c *fiber.Ctx) error {
 		return c.Status(500).JSON(fiber.Map{
 			"error": "Database error",
 		})
-	}
-
-	// Log activity
-	if userObjectID, err := primitive.ObjectIDFromHex(user.UserID); err == nil {
-		utils.LogActivity(userObjectID, user.Username, "reset_user_password", c.IP(), c.Get("User-Agent"))
 	}
 
 	return c.JSON(fiber.Map{
@@ -599,11 +585,6 @@ func UpdateUserRole(c *fiber.Ctx) error {
 		return c.Status(404).JSON(fiber.Map{
 			"error": "User not found",
 		})
-	}
-
-	// Log activity
-	if userObjectID, err := primitive.ObjectIDFromHex(user.UserID); err == nil {
-		utils.LogActivity(userObjectID, user.Username, "update_user_role", c.IP(), c.Get("User-Agent"))
 	}
 
 	return c.JSON(fiber.Map{

@@ -74,5 +74,9 @@ func SetupRoutes(app *fiber.App) {
 	docs.Post("/:id/comments", handlers.CreateComment)
 	api.Post("/upload/image", middleware.AuthRequired(), handlers.UploadImage)
 	api.Get("/templates", middleware.AuthRequired(), handlers.GetTemplates)
+	api.Get("/document-templates", handlers.GetDocumentTemplates)
+	api.Get("/documents/:id/versions", handlers.GetVersionHistory)
+	api.Get("/documents/:id/versions/compare", handlers.CompareVersions)
+	api.Get("/documents/:id/history", handlers.GetDocumentHistory)
 
 }

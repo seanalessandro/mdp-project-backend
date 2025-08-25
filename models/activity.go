@@ -6,9 +6,11 @@ import (
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
-// ActivityLog represents a user activity log entry
 type ActivityLog struct {
-	ID        primitive.ObjectID `json:"id" bson:"_id,omitempty"`
+	ID primitive.ObjectID `json:"id" bson:"_id,omitempty"`
+	// --- TAMBAHKAN FIELD INI ---
+	DocumentID *primitive.ObjectID `json:"documentId,omitempty" bson:"documentId,omitempty"`
+	// ----------------------------
 	UserID    primitive.ObjectID `json:"userId" bson:"userId"`
 	Username  string             `json:"username" bson:"username"`
 	Action    string             `json:"action" bson:"action"`
