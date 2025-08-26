@@ -33,21 +33,21 @@ func NewPDFService() *PDFService {
 
 // DocumentPDFRequest represents the request data for PDF generation
 type DocumentPDFRequest struct {
-	Title       string `json:"title"`
-	Content     string `json:"content"`
-	Status      string `json:"status"`
-	Version     string `json:"version"`
-	DocNo       string `json:"docNo"`
-	Priority    string `json:"priority"`
-	Author      string `json:"author"`
-	CreatedDate string `json:"createdDate"`
+	Title       string  `json:"title"`
+	Content     string  `json:"content"`
+	Status      string  `json:"status"`
+	Version     float64 `json:"version"`
+	DocNo       string  `json:"docNo"`
+	Priority    string  `json:"priority"`
+	Author      string  `json:"author"`
+	CreatedDate string  `json:"createdDate"`
 }
 
 // GenerateDocumentPDF creates a PDF from document data
 func (p *PDFService) GenerateDocumentPDF(docData DocumentPDFRequest) ([]byte, error) {
 	// Create new PDF document
 	pdf := gofpdf.New(p.Orientation, p.Unit, p.Format, "")
-	
+
 	// Set document properties
 	pdf.SetTitle(docData.Title, true)
 	pdf.SetAuthor(docData.Author, true)
@@ -71,7 +71,7 @@ func (p *PDFService) GenerateDocumentPDF(docData DocumentPDFRequest) ([]byte, er
 	// Generate PDF bytes
 	var buf bytes.Buffer
 	err := pdf.Output(&buf)
-	
+
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate PDF: %v", err)
 	}
@@ -105,18 +105,18 @@ func (p *PDFService) addHeader(pdf *gofpdf.Fpdf, docData DocumentPDFRequest) {
 	// Document Information (Right side)
 	pdf.SetFont("Arial", "", 10)
 	pdf.SetTextColor(100, 100, 100)
-	
+
 	pdf.SetXY(120, 15)
 	pdf.Cell(0, 4, fmt.Sprintf("Doc No: %s", docData.DocNo))
-	
+
 	pdf.SetXY(120, 20)
 	pdf.Cell(0, 4, fmt.Sprintf("Version: %s", docData.Version))
-	
+
 	pdf.SetXY(120, 25)
 	statusColor := p.getStatusColor(docData.Status)
 	pdf.SetTextColor(statusColor.R, statusColor.G, statusColor.B)
 	pdf.Cell(0, 4, fmt.Sprintf("Status: %s", strings.ToUpper(docData.Status)))
-	
+
 	pdf.SetTextColor(100, 100, 100)
 	pdf.SetXY(120, 30)
 	pdf.Cell(0, 4, fmt.Sprintf("Priority: %s", docData.Priority))
@@ -133,7 +133,7 @@ func (p *PDFService) addWatermark(pdf *gofpdf.Fpdf, status string) {
 
 	// Set watermark properties
 	pdf.SetFont("Arial", "B", 60)
-	
+
 	// Determine watermark text and color
 	watermarkText := ""
 	switch strings.ToLower(status) {
@@ -157,7 +157,7 @@ func (p *PDFService) addWatermark(pdf *gofpdf.Fpdf, status string) {
 	if watermarkText != "" {
 		// Position watermark in center of page
 		pdf.SetXY(50, 150)
-		
+
 		// Rotate text for diagonal watermark effect
 		pdf.TransformBegin()
 		pdf.TransformRotate(45, 105, 150)
@@ -176,7 +176,7 @@ func (p *PDFService) addContent(pdf *gofpdf.Fpdf, rawContent string) {
 	// Set content styling
 	pdf.SetFont("Arial", "", 11)
 	pdf.SetTextColor(50, 50, 50)
-	
+
 	// Add content section header
 	pdf.SetFont("Arial", "B", 12)
 	pdf.SetTextColor(0, 0, 0)
@@ -300,7 +300,7 @@ func (p *PDFService) processTable(pdf *gofpdf.Fpdf, node map[string]interface{})
 	if content, ok := node["content"].([]interface{}); ok {
 		// Extract table data
 		var tableData [][]string
-		
+
 		for _, rowNode := range content {
 			if rowMap, ok := rowNode.(map[string]interface{}); ok {
 				if rowType, ok := rowMap["type"].(string); ok && rowType == "tableRow" {
@@ -353,7 +353,7 @@ func (p *PDFService) extractTextFromNodes(nodes []interface{}) string {
 						}
 					}
 				}
-				
+
 				// For now, we'll extract the text and note if it should be bold
 				// The bold formatting will be handled during rendering
 				if isBold {
@@ -387,7 +387,7 @@ func (p *PDFService) renderSimpleTable(pdf *gofpdf.Fpdf, tableData [][]string) {
 	for rowIndex, row := range tableData {
 		// Calculate row height needed
 		maxHeight := 10.0
-		
+
 		// Check if we need a new page
 		if pdf.GetY() > 250 {
 			pdf.AddPage()
@@ -421,7 +421,7 @@ func (p *PDFService) renderSimpleTable(pdf *gofpdf.Fpdf, tableData [][]string) {
 			// Clean text and render
 			cleanText := strings.ReplaceAll(cellText, "**", "") // Remove bold markers
 			cleanText = strings.TrimSpace(cleanText)
-			
+
 			// Simple text rendering (truncate if too long)
 			if pdf.GetStringWidth(cleanText) > colWidth-2 {
 				// Truncate text if too long
@@ -430,7 +430,7 @@ func (p *PDFService) renderSimpleTable(pdf *gofpdf.Fpdf, tableData [][]string) {
 				}
 				cleanText += "..."
 			}
-			
+
 			pdf.Cell(colWidth-2, 6, cleanText)
 		}
 
@@ -479,23 +479,23 @@ func (p *PDFService) addWrappedText(pdf *gofpdf.Fpdf, text string, maxWidth floa
 func (p *PDFService) addFooter(pdf *gofpdf.Fpdf, docData DocumentPDFRequest) {
 	pdf.SetFooterFunc(func() {
 		pdf.SetY(-15)
-		
+
 		pdf.SetDrawColor(200, 200, 200)
 		pdf.Line(10, pdf.GetY(), 200, pdf.GetY())
-		
+
 		pdf.SetFont("Arial", "", 8)
 		pdf.SetTextColor(100, 100, 100)
-		
+
 		pdf.SetX(10)
 		footerLeft := fmt.Sprintf("Document: %s | Author: %s", docData.Title, docData.Author)
 		if len(footerLeft) > 60 {
 			footerLeft = footerLeft[:57] + "..."
 		}
 		pdf.Cell(0, 5, footerLeft)
-		
+
 		printDate := time.Now().Format("Printed on January 2, 2006 at 3:04 PM")
 		pdf.CellFormat(190, 5, printDate, "", 0, "C", false, 0, "")
-		
+
 		pdf.SetX(-30)
 		pdf.Cell(0, 5, fmt.Sprintf("Page %d", pdf.PageNo()))
 	})

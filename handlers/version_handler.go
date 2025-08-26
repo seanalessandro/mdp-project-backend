@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"encoding/json" // Pastikan package ini di-import
 	"mdp-project-backend/config"
 	"mdp-project-backend/models"
 
@@ -12,6 +13,34 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
+// FUNGSI HELPER BARU UNTUK EKSTRAK TEKS DARI JSON TIPTAP
+func extractTextFromTiptapJSON(jsonString string) string {
+	var data map[string]interface{}
+	if err := json.Unmarshal([]byte(jsonString), &data); err != nil {
+		return jsonString // Kembalikan string asli jika gagal parse
+	}
+
+	var textContent string
+	if content, ok := data["content"].([]interface{}); ok {
+		for _, node := range content {
+			if nodeMap, ok := node.(map[string]interface{}); ok {
+				if nodeContent, ok := nodeMap["content"].([]interface{}); ok {
+					for _, textNode := range nodeContent {
+						if textNodeMap, ok := textNode.(map[string]interface{}); ok {
+							if text, ok := textNodeMap["text"].(string); ok {
+								textContent += text
+							}
+						}
+					}
+				}
+				// Tambahkan baris baru setelah setiap paragraf/heading
+				textContent += "\n"
+			}
+		}
+	}
+	return textContent
+}
+
 // GetVersionHistory mengambil daftar riwayat versi untuk sebuah dokumen.
 func GetVersionHistory(c *fiber.Ctx) error {
 	docID, err := primitive.ObjectIDFromHex(c.Params("id"))
@@ -21,7 +50,7 @@ func GetVersionHistory(c *fiber.Ctx) error {
 
 	collection := config.GetCollection("document_versions")
 	filter := bson.M{"documentId": docID}
-	opts := options.Find().SetSort(bson.D{{Key: "createdOn", Value: -1}}) // Urutkan dari yang terbaru
+	opts := options.Find().SetSort(bson.D{{Key: "createdOn", Value: -1}})
 
 	cursor, err := collection.Find(context.Background(), filter, opts)
 	if err != nil {
@@ -50,7 +79,6 @@ func CompareVersions(c *fiber.Ctx) error {
 	collection := config.GetCollection("document_versions")
 	var fromVersion, toVersion models.DocumentVersion
 
-	// Ambil data dua versi dari database
 	collection.FindOne(context.Background(), bson.M{"_id": fromVersionID}).Decode(&fromVersion)
 	collection.FindOne(context.Background(), bson.M{"_id": toVersionID}).Decode(&toVersion)
 
@@ -58,10 +86,19 @@ func CompareVersions(c *fiber.Ctx) error {
 		return c.Status(404).JSON(fiber.Map{"error": "One or both versions not found"})
 	}
 
-	// Lakukan perbandingan (diff)
-	dmp := diffmatchpatch.New()
-	diffs := dmp.DiffMain(fromVersion.Content, toVersion.Content, true)
+	// Ekstrak teks dari konten JSON sebelum di-diff
+	fromText := extractTextFromTiptapJSON(fromVersion.Content)
+	toText := extractTextFromTiptapJSON(toVersion.Content)
 
-	// Kirim hasil diff ke frontend
-	return c.JSON(diffs)
+	// Lakukan perbandingan (diff) pada teks yang sudah diekstrak
+	dmp := diffmatchpatch.New()
+	diffsRaw := dmp.DiffMain(fromText, toText, true)
+
+	// Ubah format output menjadi array sederhana agar mudah dibaca frontend
+	var diffsSimple [][2]interface{}
+	for _, diff := range diffsRaw {
+		diffsSimple = append(diffsSimple, [2]interface{}{diff.Type, diff.Text})
+	}
+
+	return c.JSON(diffsSimple)
 }

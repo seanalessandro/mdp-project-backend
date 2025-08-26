@@ -75,8 +75,8 @@ func ExportDocumentToPDF(c *fiber.Ctx) error {
 
 	// Prepare filename
 	timestamp := time.Now().Format("20060102_150405")
-	filename := fmt.Sprintf("%s_%s.pdf", 
-		sanitizeFilename(document.Title), 
+	filename := fmt.Sprintf("%s_%s.pdf",
+		sanitizeFilename(document.Title),
 		timestamp)
 
 	// Set response headers for PDF download
@@ -158,14 +158,14 @@ func GetDocumentPDFPreview(c *fiber.Ctx) error {
 func sanitizeFilename(filename string) string {
 	invalidChars := []string{"/", "\\", ":", "*", "?", "\"", "<", ">", "|", " "}
 	result := filename
-	
+
 	for _, char := range invalidChars {
 		result = strings.ReplaceAll(result, char, "_")
 	}
-	
+
 	if len(result) > 50 {
 		result = result[:47] + "..."
 	}
-	
+
 	return result
 }
