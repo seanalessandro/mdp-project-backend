@@ -7,11 +7,15 @@ import (
 	"mdp-project-backend/models"
 
 	"github.com/gofiber/fiber/v2"
-	"github.com/sergi/go-diff/diffmatchpatch"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
-	"go.mongodb.org/mongo-driver/mongo/options"
+	"go.mongodb.org/mongo-driver/mongo" // Tambahkan import ini
 )
+
+type VersionWithUsername struct {
+	models.DocumentVersion `bson:",inline"`
+	CreatedByUsername      string `json:"createdByUsername" bson:"createdByUsername"`
+}
 
 // FUNGSI HELPER BARU UNTUK EKSTRAK TEKS DARI JSON TIPTAP
 func extractTextFromTiptapJSON(jsonString string) string {
@@ -49,17 +53,47 @@ func GetVersionHistory(c *fiber.Ctx) error {
 	}
 
 	collection := config.GetCollection("document_versions")
-	filter := bson.M{"documentId": docID}
-	opts := options.Find().SetSort(bson.D{{Key: "createdOn", Value: -1}})
 
-	cursor, err := collection.Find(context.Background(), filter, opts)
-	if err != nil {
-		return c.Status(500).JSON(fiber.Map{"error": "Failed to fetch version history"})
+	// Pipa aggregation
+	pipeline := mongo.Pipeline{
+		// Filter versi berdasarkan documentID
+		{{"$match", bson.M{"documentId": docID}}},
+
+		// Lookup untuk mengambil data user dari koleksi 'users'
+		{{"$lookup", bson.M{
+			"from":         "users",
+			"localField":   "createdBy",
+			"foreignField": "_id",
+			"as":           "creator",
+		}}},
+
+		// Flatten array 'creator' menjadi objek tunggal
+		{{"$unwind", bson.M{"path": "$creator", "preserveNullAndEmptyArrays": true}}},
+
+		// Proyeksi untuk memformat output
+		{{"$project", bson.M{
+			"_id":               "$_id",
+			"documentId":        "$documentId",
+			"version":           "$version",
+			"content":           "$content",
+			"createdOn":         "$createdOn",
+			"changeDescription": "$changeDescription",
+			"createdBy":         "$createdBy",        // Simpan ID aslinya
+			"createdByUsername": "$creator.username", // Ambil field username dari hasil lookup
+		}}},
+
+		// Urutkan berdasarkan tanggal
+		{{"$sort", bson.M{"createdOn": -1}}},
 	}
 
-	var versions []models.DocumentVersion
+	cursor, err := collection.Aggregate(context.Background(), pipeline)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to fetch version history with username"})
+	}
+	var versions []VersionWithUsername
+
 	if err = cursor.All(context.Background(), &versions); err != nil {
-		return c.Status(500).JSON(fiber.Map{"error": "Failed to decode versions"})
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to decode versions"})
 	}
 
 	return c.JSON(versions)
@@ -79,6 +113,7 @@ func CompareVersions(c *fiber.Ctx) error {
 	collection := config.GetCollection("document_versions")
 	var fromVersion, toVersion models.DocumentVersion
 
+	// Ambil kedua versi
 	collection.FindOne(context.Background(), bson.M{"_id": fromVersionID}).Decode(&fromVersion)
 	collection.FindOne(context.Background(), bson.M{"_id": toVersionID}).Decode(&toVersion)
 
@@ -86,19 +121,16 @@ func CompareVersions(c *fiber.Ctx) error {
 		return c.Status(404).JSON(fiber.Map{"error": "One or both versions not found"})
 	}
 
-	// Ekstrak teks dari konten JSON sebelum di-diff
-	fromText := extractTextFromTiptapJSON(fromVersion.Content)
-	toText := extractTextFromTiptapJSON(toVersion.Content)
+	// Ubah JSON string menjadi objek Go untuk membandingkan secara struktural
+	// Namun, Go tidak punya library diff yang mudah untuk struktur JSON.
+	// Solusi terbaik adalah membandingkan teks yang diformat khusus.
+	// Di sini, kita akan tetap mengirimkan kedua JSON string ke frontend
+	// dan membiarkan frontend yang menanganinya.
 
-	// Lakukan perbandingan (diff) pada teks yang sudah diekstrak
-	dmp := diffmatchpatch.New()
-	diffsRaw := dmp.DiffMain(fromText, toText, true)
-
-	// Ubah format output menjadi array sederhana agar mudah dibaca frontend
-	var diffsSimple [][2]interface{}
-	for _, diff := range diffsRaw {
-		diffsSimple = append(diffsSimple, [2]interface{}{diff.Type, diff.Text})
-	}
-
-	return c.JSON(diffsSimple)
+	// Perbaikan: HAPUS LOGIKA DIFF DI BACKEND
+	// Cukup kembalikan konten dari kedua versi
+	return c.JSON(fiber.Map{
+		"fromContent": fromVersion.Content,
+		"toContent":   toVersion.Content,
+	})
 }
