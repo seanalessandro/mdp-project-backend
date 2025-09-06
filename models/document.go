@@ -12,6 +12,6 @@ type Document struct {
 	OwnerID   primitive.ObjectID              `json:"ownerId" bson:"ownerId"` // ID pengguna yang memiliki dokumen
 	Status    string                          `json:"status" bson:"status"`
 	DocNo     string                          `json:"docNo" bson:"docNo"`
-	Version   float64                         `json:"version" bson:"version"` // <-- Ganti dari string
+	Version   float64                         `json:"version" bson:"version"` // Back to float64 as the correct type
 	Priority  string                          `json:"priority" bson:"priority"`
 }

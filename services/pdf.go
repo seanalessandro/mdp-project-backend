@@ -36,7 +36,7 @@ type DocumentPDFRequest struct {
 	Title       string  `json:"title"`
 	Content     string  `json:"content"`
 	Status      string  `json:"status"`
-	Version     float64 `json:"version"`
+	Version     float64 `json:"version"` // Back to float64 as the correct type
 	DocNo       string  `json:"docNo"`
 	Priority    string  `json:"priority"`
 	Author      string  `json:"author"`

@@ -104,6 +104,7 @@ func GetMyDocuments(c *fiber.Ctx) error {
 
 	var documents []models.Document
 	if err = cursor.All(context.Background(), &documents); err != nil {
+		log.Printf("Failed to decode documents into model: %v", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to decode documents"})
 	}
 
@@ -225,6 +226,21 @@ func UpdateDocumentStatus(c *fiber.Ctx) error {
 			// Jika snapshot berhasil dibuat, tambahkan operasi $inc ke BSON update
 			update["$inc"] = bson.M{"version": 1.0}
 		}
+
+		// Push document to Coda product backlog table
+		go func() {
+			codaService := config.GetCodaService()
+			if codaService != nil {
+				err := codaService.UpsertRowIntoProductBacklogTable(currentDoc.Title)
+				if err != nil {
+					log.Printf("Failed to upsert document '%s' to Coda product backlog: %v", currentDoc.Title, err)
+				} else {
+					log.Printf("Successfully added document '%s' to Coda product backlog", currentDoc.Title)
+				}
+			} else {
+				log.Printf("Coda service not available, document '%s' not added to backlog", currentDoc.Title)
+			}
+		}()
 	}
 
 	_, err = config.GetCollection("documents").UpdateOne(context.Background(), bson.M{"_id": docID}, update)

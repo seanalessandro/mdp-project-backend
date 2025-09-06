@@ -22,6 +22,7 @@ func main() {
 	config.ConnectDB()
 	config.SetupOAuth()
 	config.InitializeEmailService() // Initialize email service like @PostConstruct
+	config.InitCodaService()        // Initialize Coda API service
 
 	// 3. Buat aplikasi Fiber
 	app := fiber.New()

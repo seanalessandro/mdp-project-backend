@@ -6,7 +6,7 @@ import "go.mongodb.org/mongo-driver/bson/primitive"
 type DocumentVersion struct {
 	BaseModel         `json:",inline" bson:",inline"`
 	DocumentID        primitive.ObjectID `json:"documentId" bson:"documentId"`               // ID dokumen asli
-	Version           float64            `json:"version" bson:"version"`                     // <-- Ganti dari string
+	Version           float64            `json:"version" bson:"version"`                     // Back to float64 as the correct type
 	Content           string             `json:"content" bson:"content"`                     // Salinan lengkap konten Tiptap JSON
 	ChangeDescription string             `json:"changeDescription" bson:"changeDescription"` // Catatan pemicu, e.g., "Submitted for Review"
 }
