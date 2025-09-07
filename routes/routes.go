@@ -62,16 +62,40 @@ func SetupRoutes(app *fiber.App) {
 
 	adminApi.Get("/permissions", handlers.GetAllPermissions)
 
+	// Approval-specific routes for different roles
+	// SH (Section Head) and DH (Department Head) approval routes
+	shApi := api.Group("/approval/sh", middleware.RoleRequired("SH", "DH", "GDH")) // SH, DH, GDH can approve at SH level
+	shApi.Get("/pending", handlers.GetPendingDocumentsForRole)                     // Get documents pending SH approval
+
+	// BR (Business Requirement) approval routes
+	brApi := api.Group("/approval/br", middleware.RoleRequired("BR"))
+	brApi.Get("/pending", handlers.GetPendingDocumentsForRole) // Get documents pending BR approval
+
+	// DH/GDH final approval routes
+	dhApi := api.Group("/approval/dh", middleware.RoleRequired("DH", "GDH"))
+	dhApi.Get("/pending", handlers.GetPendingDocumentsForRole) // Get documents pending DH approval
+
+	// GDH specific approval routes (separate endpoint for clarity)
+	gdhApi := api.Group("/approval/gdh", middleware.RoleRequired("GDH"))
+	gdhApi.Get("/pending", handlers.GetPendingDocumentsForRole) // Get documents pending GDH approval
+
 	// CRUD Dokumen
 	docs := api.Group("/documents", middleware.AuthRequired())
 	docs.Post("/", handlers.CreateDocument)
 	docs.Get("/", handlers.GetMyDocuments)
+	docs.Get("/stats", handlers.GetDashboardStats) // Dashboard statistics
 	docs.Get("/:id", handlers.GetDocumentByID)
 	docs.Put("/:id", handlers.UpdateDocument)
 	docs.Patch("/:id/status", handlers.UpdateDocumentStatus)
 	docs.Delete("/:id", handlers.DeleteDocument)
 	docs.Get("/:id/comments", handlers.GetCommentsForDocument)
 	docs.Post("/:id/comments", handlers.CreateComment)
+
+	// Approval Workflow Routes - FR-5.4.2: Sequential Approval Flow
+	docs.Post("/:id/submit-review", handlers.SubmitDocumentForReview)    // Submit document for approval workflow
+	docs.Post("/:id/approve", handlers.ApproveDocument)                  // Approve document at current level
+	docs.Post("/:id/reject", handlers.RejectDocument)                    // Reject document at current level
+	docs.Get("/:id/approval-status", handlers.GetDocumentApprovalStatus) // Get approval status and history
 
 	// PDF Export Routes - FR-5.3.4: Export document to PDF
 	docs.Get("/:id/export/pdf", handlers.ExportDocumentToPDF)    // Download PDF

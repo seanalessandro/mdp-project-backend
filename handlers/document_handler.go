@@ -59,6 +59,11 @@ func CreateDocument(c *fiber.Ctx) error {
 		OwnerID:  ownerID,
 	}
 
+	// Initialize approval workflow with empty arrays
+	// Will be populated when document is submitted for review
+	newDoc.CurrentApprovalLevel = 0
+	newDoc.Approvals = []models.ApprovalLevel{}
+
 	_, err = config.GetCollection("documents").InsertOne(context.Background(), newDoc)
 	if err != nil {
 		if mongo.IsDuplicateKeyError(err) {
@@ -365,4 +370,388 @@ func GetDocumentHistory(c *fiber.Ctx) error {
 	}
 
 	return c.JSON(logs)
+}
+
+// GetDashboardStats mendapatkan statistik dokumen untuk dashboard
+func GetDashboardStats(c *fiber.Ctx) error {
+	claims := c.Locals("user").(*utils.Claims)
+	ownerID, _ := primitive.ObjectIDFromHex(claims.UserID)
+
+	collection := config.GetCollection("documents")
+	filter := bson.M{"ownerId": ownerID}
+
+	// Hitung total dokumen
+	totalCount, err := collection.CountDocuments(context.Background(), filter)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to count documents"})
+	}
+
+	// Hitung berdasarkan status
+	statusCounts := make(map[string]int64)
+	statuses := []string{"draft", "Ready for Review", "Menunggu persetujuan BR", "Menunggu persetujuan DH", "Final Approved", "Rejected"}
+
+	for _, status := range statuses {
+		statusFilter := bson.M{"ownerId": ownerID, "status": status}
+		count, err := collection.CountDocuments(context.Background(), statusFilter)
+		if err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to count by status"})
+		}
+		statusCounts[status] = count
+	} // Ambil dokumen terbaru (limit 10)
+	opts := options.Find().SetSort(bson.D{{Key: "modifiedOn", Value: -1}}).SetLimit(10)
+	cursor, err := collection.Find(context.Background(), filter, opts)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to fetch recent documents"})
+	}
+
+	var recentDocuments []models.Document
+	if err = cursor.All(context.Background(), &recentDocuments); err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to decode documents"})
+	}
+
+	stats := fiber.Map{
+		"totalDocuments": totalCount,
+		"statusCounts": fiber.Map{
+			"draft":          statusCounts["draft"],
+			"readyForReview": statusCounts["Ready for Review"],
+			"waitingBR":      statusCounts["Menunggu persetujuan BR"],
+			"waitingDH":      statusCounts["Menunggu persetujuan DH"],
+			"finalApproved":  statusCounts["Final Approved"],
+			"rejected":       statusCounts["Rejected"],
+		},
+		"recentDocuments": recentDocuments,
+	}
+
+	return c.JSON(stats)
+}
+
+// SubmitDocumentForReview initializes the approval workflow for a document
+func SubmitDocumentForReview(c *fiber.Ctx) error {
+	claims := c.Locals("user").(*utils.Claims)
+	userID, _ := primitive.ObjectIDFromHex(claims.UserID)
+
+	docID, err := primitive.ObjectIDFromHex(c.Params("id"))
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid document ID"})
+	}
+
+	collection := config.GetCollection("documents")
+
+	// First, get the document to check ownership
+	var doc models.Document
+	err = collection.FindOne(context.Background(), bson.M{"_id": docID}).Decode(&doc)
+	if err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Document not found"})
+	}
+
+	// Check if user owns the document
+	if doc.OwnerID != userID {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "You can only submit your own documents"})
+	}
+
+	// Check if document is in draft status
+	if doc.Status != "Draft" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Only draft documents can be submitted for review"})
+	}
+
+	// Initialize approval workflow
+	doc.InitializeApprovalWorkflow()
+
+	// Update the document
+	update := bson.M{
+		"$set": bson.M{
+			"status":               doc.Status,
+			"currentApprovalLevel": doc.CurrentApprovalLevel,
+			"approvals":            doc.Approvals,
+			"modifiedOn":           time.Now(),
+			"modifiedBy":           &userID,
+		},
+	}
+
+	_, err = collection.UpdateOne(context.Background(), bson.M{"_id": docID}, update)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to submit document for review"})
+	}
+
+	// Log the activity
+	logAction := "Submitted document for review"
+	utils.LogActivity(userID, claims.Username, logAction, c.IP(), string(c.Request().Header.UserAgent()), &docID)
+
+	// TODO: Send notification to SH approvers
+
+	return c.JSON(fiber.Map{
+		"message": "Document submitted for review successfully",
+		"status":  doc.Status,
+	})
+}
+
+// ApproveDocument handles approval of a document at current level
+func ApproveDocument(c *fiber.Ctx) error {
+	claims := c.Locals("user").(*utils.Claims)
+	userID, _ := primitive.ObjectIDFromHex(claims.UserID)
+
+	docID, err := primitive.ObjectIDFromHex(c.Params("id"))
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid document ID"})
+	}
+
+	var body struct {
+		Comments string `json:"comments"`
+	}
+	if err := c.BodyParser(&body); err != nil {
+		body.Comments = ""
+	}
+
+	collection := config.GetCollection("documents")
+
+	// Get the document
+	var doc models.Document
+	err = collection.FindOne(context.Background(), bson.M{"_id": docID}).Decode(&doc)
+	if err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Document not found"})
+	}
+
+	// Get user role from claims (assuming role is stored in claims)
+	// You might need to fetch user role from users collection if not in claims
+	userRole := getUserRole(claims.UserID) // This function needs to be implemented
+
+	// Check if user can approve at current level
+	if !doc.CanUserApprove(userRole) {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
+			"error": fmt.Sprintf("You cannot approve at the current level. Current level requires: %s", doc.GetCurrentApprovalLevel().RoleName),
+		})
+	}
+
+	// Approve the current level
+	err = doc.ApproveCurrentLevel(userID, body.Comments)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
+	}
+
+	// Update the document in database
+	update := bson.M{
+		"$set": bson.M{
+			"status":               doc.Status,
+			"currentApprovalLevel": doc.CurrentApprovalLevel,
+			"approvals":            doc.Approvals,
+			"modifiedOn":           time.Now(),
+			"modifiedBy":           &userID,
+		},
+	}
+
+	_, err = collection.UpdateOne(context.Background(), bson.M{"_id": docID}, update)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to approve document"})
+	}
+
+	// Log the activity
+	logAction := fmt.Sprintf("Approved document at level %s", userRole)
+	utils.LogActivity(userID, claims.Username, logAction, c.IP(), string(c.Request().Header.UserAgent()), &docID)
+
+	// TODO: Send notification to next level approvers or document owner
+
+	return c.JSON(fiber.Map{
+		"message":         "Document approved successfully",
+		"status":          doc.Status,
+		"isFullyApproved": doc.IsFullyApproved(),
+	})
+}
+
+// RejectDocument handles rejection of a document at current level
+func RejectDocument(c *fiber.Ctx) error {
+	claims := c.Locals("user").(*utils.Claims)
+	userID, _ := primitive.ObjectIDFromHex(claims.UserID)
+
+	docID, err := primitive.ObjectIDFromHex(c.Params("id"))
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid document ID"})
+	}
+
+	var body struct {
+		Comments string `json:"comments"`
+	}
+	if err := c.BodyParser(&body); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Comments are required for rejection"})
+	}
+
+	if body.Comments == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Comments are required for rejection"})
+	}
+
+	collection := config.GetCollection("documents")
+
+	// Get the document
+	var doc models.Document
+	err = collection.FindOne(context.Background(), bson.M{"_id": docID}).Decode(&doc)
+	if err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Document not found"})
+	}
+
+	// Get user role
+	userRole := getUserRole(claims.UserID)
+
+	// Check if user can reject at current level
+	if !doc.CanUserApprove(userRole) {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
+			"error": fmt.Sprintf("You cannot reject at the current level. Current level requires: %s", doc.GetCurrentApprovalLevel().RoleName),
+		})
+	}
+
+	// Reject the current level
+	err = doc.RejectCurrentLevel(userID, body.Comments)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
+	}
+
+	// Update the document in database
+	update := bson.M{
+		"$set": bson.M{
+			"status":               doc.Status,
+			"currentApprovalLevel": doc.CurrentApprovalLevel,
+			"approvals":            doc.Approvals,
+			"modifiedOn":           time.Now(),
+			"modifiedBy":           &userID,
+		},
+	}
+
+	_, err = collection.UpdateOne(context.Background(), bson.M{"_id": docID}, update)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to reject document"})
+	}
+
+	// Log the activity
+	logAction := fmt.Sprintf("Rejected document at level %s: %s", userRole, body.Comments)
+	utils.LogActivity(userID, claims.Username, logAction, c.IP(), string(c.Request().Header.UserAgent()), &docID)
+
+	// TODO: Send notification to document owner
+
+	return c.JSON(fiber.Map{
+		"message":  "Document rejected successfully",
+		"status":   doc.Status,
+		"comments": body.Comments,
+	})
+}
+
+// GetDocumentApprovalStatus returns the approval status and history of a document
+func GetDocumentApprovalStatus(c *fiber.Ctx) error {
+	docID, err := primitive.ObjectIDFromHex(c.Params("id"))
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid document ID"})
+	}
+
+	collection := config.GetCollection("documents")
+	var doc models.Document
+	err = collection.FindOne(context.Background(), bson.M{"_id": docID}).Decode(&doc)
+	if err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Document not found"})
+	}
+
+	return c.JSON(fiber.Map{
+		"documentId":           doc.ID,
+		"title":                doc.Title,
+		"status":               doc.Status,
+		"currentApprovalLevel": doc.CurrentApprovalLevel,
+		"approvals":            doc.Approvals,
+		"isFullyApproved":      doc.IsFullyApproved(),
+	})
+}
+
+// Helper function to get user role - needs to be implemented based on your user system
+func getUserRole(userID string) string {
+	// TODO: Implement this function to fetch user role from database
+	// This is a placeholder implementation
+	collection := config.GetCollection("users")
+	userObjID, _ := primitive.ObjectIDFromHex(userID)
+
+	var user models.User
+	err := collection.FindOne(context.Background(), bson.M{"_id": userObjID}).Decode(&user)
+	if err != nil {
+		return "unknown"
+	}
+
+	// Get role name from roles collection
+	roleCollection := config.GetCollection("roles")
+	var role models.Role
+	err = roleCollection.FindOne(context.Background(), bson.M{"_id": user.RoleID}).Decode(&role)
+	if err != nil {
+		return "unknown"
+	}
+
+	return role.Name
+}
+
+// GetPendingDocumentsForRole returns documents pending approval for the current user's role
+func GetPendingDocumentsForRole(c *fiber.Ctx) error {
+	claims := c.Locals("user").(*utils.Claims)
+	userRole := getUserRole(claims.UserID)
+
+	if userRole == "unknown" {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Unable to determine user role"})
+	}
+
+	collection := config.GetCollection("documents")
+
+	// Build filter based on role and current approval level
+	var filter bson.M
+
+	switch userRole {
+	case "SH":
+		// For SH level approval (level 1)
+		filter = bson.M{
+			"currentApprovalLevel": 1,
+			"approvals.0.status":   "pending", // First approval level is pending
+		}
+	case "DH":
+		// DH can approve at both level 1 (SH) and level 3 (DH) - FR-5.4.2.3
+		filter = bson.M{
+			"$or": []bson.M{
+				{
+					"currentApprovalLevel": 1,
+					"approvals.0.status":   "pending", // Level 1: SH approval
+				},
+				{
+					"currentApprovalLevel": 3,
+					"approvals.2.status":   "pending",  // Level 3: DH approval
+					"approvals.0.status":   "approved", // First level must be approved
+					"approvals.1.status":   "approved", // Second level must be approved
+				},
+			},
+		}
+	case "BR":
+		// For BR level approval (level 2)
+		filter = bson.M{
+			"currentApprovalLevel": 2,
+			"approvals.1.status":   "pending",  // Second approval level is pending
+			"approvals.0.status":   "approved", // First level must be approved
+		}
+	case "GDH":
+		// For GDH final approval (level 3 only)
+		filter = bson.M{
+			"currentApprovalLevel": 3,
+			"approvals.2.status":   "pending",  // Third approval level is pending
+			"approvals.0.status":   "approved", // First level must be approved
+			"approvals.1.status":   "approved", // Second level must be approved
+		}
+	default:
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Role not authorized for approvals"})
+	}
+
+	// Add condition to only show documents that are in approval workflow
+	filter["status"] = bson.M{"$in": []string{"Ready for Review", "Menunggu persetujuan BR", "Menunggu persetujuan DH"}}
+
+	cursor, err := collection.Find(context.Background(), filter)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to fetch pending documents"})
+	}
+
+	var documents []models.Document
+	if err = cursor.All(context.Background(), &documents); err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to decode documents"})
+	}
+
+	return c.JSON(fiber.Map{
+		"role":             userRole,
+		"pendingDocuments": documents,
+		"count":            len(documents),
+	})
 }
