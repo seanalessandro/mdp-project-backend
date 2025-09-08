@@ -108,4 +108,12 @@ func SetupRoutes(app *fiber.App) {
 	api.Get("/documents/:id/versions/compare", handlers.CompareVersions)
 	api.Get("/documents/:id/history", handlers.GetDocumentHistory)
 
+	// Master Menu Management
+	adminApi.Post("/menus", handlers.CreateMenu)
+	adminApi.Get("/menus", handlers.GetAllMenus)
+	adminApi.Get("/menus/:id", handlers.GetMenuByID)
+	adminApi.Put("/menus/:id", handlers.UpdateMenu)
+	adminApi.Delete("/menus/:id", handlers.DeleteMenu)
+	adminApi.Patch("/menus/:id/status", handlers.ToggleMenuStatus)
+
 }
