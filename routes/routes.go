@@ -116,9 +116,10 @@ func SetupRoutes(app *fiber.App) {
 	adminApi.Delete("/menus/:id", handlers.DeleteMenu)
 	adminApi.Patch("/menus/:id/status", handlers.ToggleMenuStatus)
 
-	adminApi.Get("/role-menus", handlers.GetAllRoleMenuMappings)
-	adminApi.Post("/role-menus", handlers.CreateRoleMenuMapping)
-	adminApi.Delete("/role-menus/:id", handlers.DeleteRoleMenuMapping)
-	adminApi.Put("/role-menus/:roleId", handlers.UpdateRoleMenus)
+	adminApi.Post("/role-menu-mappings", handlers.CreateRoleMenuMapping)
+	adminApi.Get("/role-menu-mappings", handlers.GetRoleMenuMappings)
+	adminApi.Get("/role-menu-mappings/:id", handlers.GetRoleMenuMappingByID)
+	adminApi.Put("/role-menu-mappings/:id", handlers.UpdateRoleMenuMapping)
+	adminApi.Delete("/role-menu-mappings/:id", handlers.DeleteRoleMenuMapping)
 
 }
