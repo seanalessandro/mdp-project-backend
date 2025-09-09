@@ -181,6 +181,14 @@ func helperCreateVersion(docID primitive.ObjectID, changeDesc string) error {
 		ChangeDescription: changeDesc,
 	}
 
+	update := bson.M{
+		"$inc": bson.M{"version": 1.0},
+	}
+	_, err = docCollection.UpdateOne(context.Background(), bson.M{"_id": docID}, update)
+	if err != nil {
+		return fmt.Errorf("failed to update document version: %w", err)
+	}
+
 	// 3. Simpan versi baru
 	_, err = versionCollection.InsertOne(context.Background(), newVersion)
 	return err
@@ -429,6 +437,7 @@ func GetDashboardStats(c *fiber.Ctx) error {
 func SubmitDocumentForReview(c *fiber.Ctx) error {
 	claims := c.Locals("user").(*utils.Claims)
 	userID, _ := primitive.ObjectIDFromHex(claims.UserID)
+	userRoleName := claims.Role
 
 	docID, err := primitive.ObjectIDFromHex(c.Params("id"))
 	if err != nil {
@@ -477,6 +486,18 @@ func SubmitDocumentForReview(c *fiber.Ctx) error {
 	logAction := "Submitted document for review"
 	utils.LogActivity(userID, claims.Username, logAction, c.IP(), string(c.Request().Header.UserAgent()), &docID)
 
+	go utils.LogApprovalHistory(
+		docID, // Gunakan newDocID
+		"submitted",
+		0,            // Level
+		userRoleName, // RoleName
+		userID,
+		claims.Username,
+		"Draft",
+		doc.Status,
+		"Dokumen diajukan untuk ditinjau",
+	)
+
 	// TODO: Send notification to SH approvers
 
 	return c.JSON(fiber.Map{
@@ -489,8 +510,8 @@ func SubmitDocumentForReview(c *fiber.Ctx) error {
 func ApproveDocument(c *fiber.Ctx) error {
 	claims := c.Locals("user").(*utils.Claims)
 	userID, _ := primitive.ObjectIDFromHex(claims.UserID)
-
 	docID, err := primitive.ObjectIDFromHex(c.Params("id"))
+
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid document ID"})
 	}
@@ -511,9 +532,8 @@ func ApproveDocument(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Document not found"})
 	}
 
-	// Get user role from claims (assuming role is stored in claims)
-	// You might need to fetch user role from users collection if not in claims
-	userRole := getUserRole(claims.UserID) // This function needs to be implemented
+	prevStatus := doc.Status
+	userRole := getUserRole(claims.UserID)
 
 	// Check if user can approve at current level
 	if !doc.CanUserApprove(userRole) {
@@ -547,7 +567,17 @@ func ApproveDocument(c *fiber.Ctx) error {
 	// Log the activity
 	logAction := fmt.Sprintf("Approved document at level %s", userRole)
 	utils.LogActivity(userID, claims.Username, logAction, c.IP(), string(c.Request().Header.UserAgent()), &docID)
-
+	go utils.LogApprovalHistory(
+		docID,
+		"approved",
+		doc.CurrentApprovalLevel-1,
+		userRole,
+		userID,
+		claims.Username,
+		prevStatus,
+		doc.Status,
+		body.Comments,
+	)
 	// TODO: Send notification to next level approvers or document owner
 
 	return c.JSON(fiber.Map{
@@ -586,7 +616,7 @@ func RejectDocument(c *fiber.Ctx) error {
 	if err != nil {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Document not found"})
 	}
-
+	prevStatus := doc.Status
 	// Get user role
 	userRole := getUserRole(claims.UserID)
 
@@ -623,6 +653,17 @@ func RejectDocument(c *fiber.Ctx) error {
 	logAction := fmt.Sprintf("Rejected document at level %s: %s", userRole, body.Comments)
 	utils.LogActivity(userID, claims.Username, logAction, c.IP(), string(c.Request().Header.UserAgent()), &docID)
 
+	go utils.LogApprovalHistory(
+		docID,
+		"rejected",
+		doc.CurrentApprovalLevel,
+		userRole,
+		userID,
+		claims.Username,
+		prevStatus,
+		doc.Status,
+		body.Comments,
+	)
 	// TODO: Send notification to document owner
 
 	return c.JSON(fiber.Map{
@@ -753,5 +794,94 @@ func GetPendingDocumentsForRole(c *fiber.Ctx) error {
 		"role":             userRole,
 		"pendingDocuments": documents,
 		"count":            len(documents),
+	})
+}
+func GetDocumentApprovalHistory(c *fiber.Ctx) error {
+	docID, err := primitive.ObjectIDFromHex(c.Params("id"))
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid document ID"})
+	}
+
+	// Akses koleksi riwayat persetujuan yang baru
+	historyCollection := config.GetCollection("approval_histories")
+
+	// Cari semua entri riwayat untuk dokumen ini
+	filter := bson.M{"documentId": docID}
+
+	// Urutkan berdasarkan timestamp agar terlama di atas (urutan kronologis)
+	opts := options.Find().SetSort(bson.D{{Key: "timestamp", Value: 1}})
+
+	cursor, err := historyCollection.Find(context.Background(), filter, opts)
+	if err != nil {
+		log.Printf("Failed to fetch approval history for doc %s: %v", docID.Hex(), err)
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to fetch approval history"})
+	}
+
+	var history []models.ApprovalHistoryEntry
+	if err = cursor.All(context.Background(), &history); err != nil {
+		log.Printf("Failed to decode approval history: %v", err)
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to decode approval history"})
+	}
+
+	return c.JSON(history)
+}
+
+func ReviseDocument(c *fiber.Ctx) error {
+	claims := c.Locals("user").(*utils.Claims)
+	userID, _ := primitive.ObjectIDFromHex(claims.UserID)
+	userRoleName := claims.Role
+
+	docID, err := primitive.ObjectIDFromHex(c.Params("id"))
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid document ID"})
+	}
+
+	// Panggil helper untuk membuat versi baru
+	err = helperCreateVersion(docID, "Dokumen direvisi, versi baru dibuat.")
+	if err != nil {
+		log.Printf("Failed to create new version for revision: %v", err)
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to create new document version for revision"})
+	}
+
+	// Ambil dokumen terbaru setelah helperCreateVersion menaikkan versinya
+	collection := config.GetCollection("documents")
+	var doc models.Document
+	err = collection.FindOne(context.Background(), bson.M{"_id": docID}).Decode(&doc)
+	if err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Document not found after revision"})
+	}
+
+	// Update status dokumen menjadi Draft
+	update := bson.M{
+		"$set": bson.M{
+			"status":               "Draft",
+			"approvals":            []models.ApprovalLevel{}, // Reset approval workflow
+			"currentApprovalLevel": 0,
+			"modifiedOn":           time.Now(),
+			"modifiedBy":           &userID,
+		},
+	}
+	_, err = collection.UpdateOne(context.Background(), bson.M{"_id": docID}, update)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to update document status to Draft"})
+	}
+
+	// Log riwayat persetujuan untuk aksi revisi
+	go utils.LogApprovalHistory(
+		docID,
+		"revised", // Aksi baru: revised
+		0,         // Level
+		userRoleName,
+		userID,
+		claims.Username,
+		doc.Status, // Status lama sebelum menjadi Draft
+		"Draft",
+		"Dokumen direvisi menjadi versi "+fmt.Sprintf("%.1f", doc.Version),
+	)
+
+	return c.JSON(fiber.Map{
+		"message":    "Document revised successfully",
+		"newVersion": doc.Version,
+		"newStatus":  "Draft",
 	})
 }

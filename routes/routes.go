@@ -90,6 +90,8 @@ func SetupRoutes(app *fiber.App) {
 	docs.Delete("/:id", handlers.DeleteDocument)
 	docs.Get("/:id/comments", handlers.GetCommentsForDocument)
 	docs.Post("/:id/comments", handlers.CreateComment)
+	docs.Get("/:id/approval-history", handlers.GetDocumentApprovalHistory)
+	docs.Post("/:id/revise", handlers.ReviseDocument)
 
 	// Approval Workflow Routes - FR-5.4.2: Sequential Approval Flow
 	docs.Post("/:id/submit-review", handlers.SubmitDocumentForReview)    // Submit document for approval workflow
