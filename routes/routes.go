@@ -82,6 +82,7 @@ func SetupRoutes(app *fiber.App) {
 	// CRUD Dokumen
 	docs := api.Group("/documents", middleware.AuthRequired())
 	docs.Post("/", handlers.CreateDocument)
+	docs.Get("/all", handlers.GetDocuments)
 	docs.Get("/", handlers.GetMyDocuments)
 	docs.Get("/stats", handlers.GetDashboardStats) // Dashboard statistics
 	docs.Get("/:id", handlers.GetDocumentByID)

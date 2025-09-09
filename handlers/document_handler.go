@@ -885,3 +885,95 @@ func ReviseDocument(c *fiber.Ctx) error {
 		"newStatus":  "Draft",
 	})
 }
+
+func GetDocuments(c *fiber.Ctx) error {
+
+	collection := config.GetCollection("documents")
+	filters := bson.D{}
+
+	// 🔎 Search (judul/isi dokumen)
+	if search := c.Query("search"); search != "" {
+		filters = append(filters, bson.E{
+			Key: "$or", Value: bson.A{
+				bson.D{{"title", primitive.Regex{Pattern: search, Options: "i"}}},
+				bson.D{{"content", primitive.Regex{Pattern: search, Options: "i"}}},
+			},
+		})
+	}
+
+	// 📂 Filter jenis dokumen
+	if docType := c.Query("type"); docType != "" {
+		filters = append(filters, bson.E{Key: "type", Value: docType})
+	}
+
+	// 👤 Filter pembuat dokumen (username)
+	if creator := c.Query("creator"); creator != "" {
+		filters = append(filters, bson.E{Key: "owner.username", Value: primitive.Regex{Pattern: creator, Options: "i"}})
+	}
+
+	// 📌 Filter status
+	if status := c.Query("status"); status != "" {
+		filters = append(filters, bson.E{Key: "status", Value: status})
+	}
+
+	// 📅 Filter rentang tanggal createdOn
+	startDateStr := c.Query("startDate")
+	endDateStr := c.Query("endDate")
+	dateFilter := bson.D{}
+	if startDateStr != "" {
+		if startDate, err := time.Parse("2006-01-02", startDateStr); err == nil {
+			dateFilter = append(dateFilter, bson.E{Key: "$gte", Value: startDate})
+		}
+	}
+	if endDateStr != "" {
+		if endDate, err := time.Parse("2006-01-02", endDateStr); err == nil {
+			dateFilter = append(dateFilter, bson.E{Key: "$lte", Value: endDate})
+		}
+	}
+	if len(dateFilter) > 0 {
+		filters = append(filters, bson.E{Key: "createdOn", Value: dateFilter})
+	}
+
+	// 🔗 Pipeline agregasi
+	pipeline := mongo.Pipeline{}
+
+	if len(filters) > 0 {
+		pipeline = append(pipeline, bson.D{{Key: "$match", Value: filters}})
+	}
+
+	// Join ke users biar dapet nama pembuat
+	pipeline = append(pipeline,
+		bson.D{{Key: "$lookup", Value: bson.D{
+			{"from", "users"},
+			{"localField", "ownerId"},
+			{"foreignField", "_id"},
+			{"as", "owner"},
+		}}},
+		bson.D{{Key: "$unwind", Value: bson.D{
+			{"path", "$owner"},
+			{"preserveNullAndEmptyArrays", true},
+		}}},
+		bson.D{{Key: "$addFields", Value: bson.D{
+			{"ownerUsername", "$owner.username"},
+			{"ownerEmail", "$owner.email"},
+			{"dokumenDibuat", "$createdOn"},
+		}}},
+	)
+
+	cursor, err := collection.Aggregate(c.Context(), pipeline)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error": "Failed to fetch documents",
+		})
+	}
+	defer cursor.Close(c.Context())
+
+	var documents []bson.M
+	if err := cursor.All(c.Context(), &documents); err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error": "Failed to decode documents",
+		})
+	}
+
+	return c.JSON(documents)
+}
