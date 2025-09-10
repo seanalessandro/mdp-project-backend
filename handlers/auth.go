@@ -105,7 +105,96 @@ func ChangePassword(c *fiber.Ctx) error {
 
 // Logout (opsional, bisa digunakan untuk logging)
 func Logout(c *fiber.Ctx) error {
-	// Logout pada JWT biasanya ditangani oleh frontend dengan menghapus token.
-	// Endpoint ini bisa ada untuk tujuan logging jika diperlukan.
+	claims := c.Locals("user").(*utils.Claims)
+	userID, _ := primitive.ObjectIDFromHex(claims.UserID)
+
+	// Clear refresh token from database
+	collection := config.GetCollection("users")
+	_, err := collection.UpdateOne(
+		context.Background(),
+		bson.M{"_id": userID},
+		bson.M{"$unset": bson.M{"refreshToken": "", "tokenExpiry": ""}},
+	)
+	if err != nil {
+		log.Printf("Failed to clear refresh token for user %s: %v", claims.Username, err)
+	}
+
 	return c.JSON(fiber.Map{"message": "Logged out successfully"})
+}
+
+// RefreshToken generates new access token using refresh token
+func RefreshToken(c *fiber.Ctx) error {
+	var req models.RefreshTokenRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request format"})
+	}
+
+	// Validate refresh token
+	refreshClaims, err := utils.ValidateRefreshToken(req.RefreshToken)
+	if err != nil {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Invalid refresh token"})
+	}
+
+	userID, err := primitive.ObjectIDFromHex(refreshClaims.UserID)
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid user ID"})
+	}
+
+	// Check if refresh token exists in database and is still valid
+	collection := config.GetCollection("users")
+	var user models.User
+	err = collection.FindOne(context.Background(), bson.M{
+		"_id":          userID,
+		"refreshToken": req.RefreshToken,
+		"tokenExpiry":  bson.M{"$gte": time.Now()},
+	}).Decode(&user)
+
+	if err != nil {
+		if err == mongo.ErrNoDocuments {
+			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Refresh token expired or invalid"})
+		}
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Database error"})
+	}
+
+	// Get user role
+	roleCollection := config.GetCollection("roles")
+	var role models.Role
+	err = roleCollection.FindOne(context.Background(), bson.M{"_id": user.RoleID}).Decode(&role)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "User role configuration is invalid"})
+	}
+
+	// Generate new tokens
+	newToken, err := utils.GenerateJWT(user.Username, role.Name, user.ID.Hex())
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to generate new access token"})
+	}
+
+	newRefreshToken, err := utils.GenerateRefreshToken(user.Username, user.ID.Hex())
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to generate new refresh token"})
+	}
+
+	// Update refresh token in database
+	now := time.Now()
+	tokenExpiry := now.Add(7 * 24 * time.Hour)
+	_, err = collection.UpdateOne(
+		context.Background(),
+		bson.M{"_id": userID},
+		bson.M{"$set": bson.M{
+			"refreshToken": newRefreshToken,
+			"tokenExpiry":  tokenExpiry,
+			"modifiedOn":   now,
+		}},
+	)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to update refresh token"})
+	}
+
+	return c.JSON(models.TokenResponse{
+		Token:        newToken,
+		RefreshToken: newRefreshToken,
+		User:         user,
+		Role:         role,
+	})
 }

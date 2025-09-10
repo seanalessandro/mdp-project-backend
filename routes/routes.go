@@ -22,6 +22,7 @@ func SetupRoutes(app *fiber.App) {
 
 	// Otentikasi Lokal (username/password)
 	auth.Post("/login", handlers.Login)
+	auth.Post("/refresh", handlers.RefreshToken) // Refresh token endpoint
 
 	// Otentikasi via Google OAuth2
 	auth.Get("/google/login", handlers.GoogleLogin)
@@ -37,6 +38,7 @@ func SetupRoutes(app *fiber.App) {
 	// Rute Profil Pengguna
 	api.Get("/profile", handlers.GetProfile)
 	api.Post("/change-password", handlers.ChangePassword)
+	api.Get("/user/menus", handlers.GetUserMenus) // Get user's accessible menus
 	api.Post("/logout", handlers.Logout) // Meskipun hanya di sisi client, endpoint ini bisa untuk logging
 
 	// Contoh rute khusus Admin

@@ -102,23 +102,40 @@ func generateLoginResponse(c *fiber.Ctx, user models.User) error {
 	}
 	// --------------------------------------------
 
-	// Update last login
-	now := time.Now()
-	update := bson.M{"$set": bson.M{"lastLogin": now, "modifiedOn": now}}
-	config.GetCollection("users").UpdateOne(ctx, bson.M{"_id": user.ID}, update)
-	user.LastLogin = &now
-
-	// --- PERBAIKAN: Generate JWT dengan NAMA PERAN (role.Name), bukan ID ---
+	// --- GENERATE TOKENS ---
+	// Generate access token
 	token, err := utils.GenerateJWT(user.Username, role.Name, user.ID.Hex())
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to generate session token"})
 	}
 
+	// Generate refresh token
+	refreshToken, err := utils.GenerateRefreshToken(user.Username, user.ID.Hex())
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to generate refresh token"})
+	}
+	// -----------------------
+
+	// Update user with refresh token and last login
+	now := time.Now()
+	tokenExpiry := now.Add(7 * 24 * time.Hour) // 7 days for refresh token
+	update := bson.M{
+		"$set": bson.M{
+			"lastLogin":    now,
+			"modifiedOn":   now,
+			"refreshToken": refreshToken,
+			"tokenExpiry":  tokenExpiry,
+		},
+	}
+	config.GetCollection("users").UpdateOne(ctx, bson.M{"_id": user.ID}, update)
+	user.LastLogin = &now
+
 	// --- PERBAIKAN: Kirim response lengkap dengan detail user dan role ---
 	return c.JSON(models.LoginResponse{
-		Token: token,
-		User:  user,
-		Role:  role,
+		Token:        token,
+		RefreshToken: refreshToken,
+		User:         user,
+		Role:         role,
 	})
 }
 

@@ -22,3 +22,9 @@ type MenuRequest struct {
 	IsActive *bool  `json:"isActive"` // Pointer agar bisa membedakan antara false dan tidak dikirim
 	ParentID string `json:"parentId"`
 }
+
+// MenuWithChildren represents a menu item with its children for hierarchical display
+type MenuWithChildren struct {
+	Menu     `json:",inline" bson:",inline"`
+	Children []MenuWithChildren `json:"children,omitempty"`
+}
