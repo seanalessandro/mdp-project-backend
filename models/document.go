@@ -19,20 +19,26 @@ type ApprovalLevel struct {
 
 // Document merepresentasikan sebuah dokumen teks di database.
 type Document struct {
-	BaseModel            `json:",inline" bson:",inline"` // Menyematkan ID, CreatedOn, CreatedBy, dll.
-	Title                string                          `json:"title" bson:"title"`     // Judul dokumen
-	Content              string                          `json:"content" bson:"content"` // Konten dokumen dalam format JSON string dari Lexical
-	OwnerID              primitive.ObjectID              `json:"ownerId" bson:"ownerId"` // ID pengguna yang memiliki dokumen
-	Status               string                          `json:"status" bson:"status"`
-	DocNo                string                          `json:"docNo" bson:"docNo"`
-	Version              float64                         `json:"version" bson:"version"` // Back to float64 as the correct type
-	Priority             string                          `json:"priority" bson:"priority"`
-	CurrentApprovalLevel int                             `json:"currentApprovalLevel" bson:"currentApprovalLevel"` // 0 = draft/not submitted, 1 = SH, 2 = BR, 3 = DH/GDH
-	Approvals            []ApprovalLevel                 `json:"approvals" bson:"approvals"`                       // Sequential approval chain
+	BaseModel             `json:",inline" bson:",inline"` // Menyematkan ID, CreatedOn, CreatedBy, dll.
+	Title                 string                          `json:"title" bson:"title"`     // Judul dokumen
+	Content               string                          `json:"content" bson:"content"` // Konten dokumen dalam format JSON string dari Lexical
+	OwnerID               primitive.ObjectID              `json:"ownerId" bson:"ownerId"` // ID pengguna yang memiliki dokumen
+	Status                string                          `json:"status" bson:"status"`
+	DocNo                 string                          `json:"docNo" bson:"docNo"`
+	Version               float64                         `json:"version" bson:"version"` // Back to float64 as the correct type
+	Priority              string                          `json:"priority" bson:"priority"`
+	CurrentApprovalLevel  int                             `json:"currentApprovalLevel" bson:"currentApprovalLevel"` // 0 = draft/not submitted, 1 = SH, 2 = BR, 3 = DH/GDH, 4 = Final Approved
+	Approvals             []ApprovalLevel                 `json:"approvals" bson:"approvals"`                       // Sequential approval chain
+	CodaRequestID         string                          `json:"codaRequestId,omitempty" bson:"codaRequestId,omitempty"`
+	CodaSyncStatus        string                          `json:"codaSyncStatus,omitempty" bson:"codaSyncStatus,omitempty"` // "pending", "completed", "failed"
+	CodaLastSyncAt        time.Time                       `json:"codaLastSyncAt,omitempty" bson:"codaLastSyncAt,omitempty"`
+	CodaSyncError         string                          `json:"codaSyncError,omitempty" bson:"codaSyncError,omitempty"`
+	CodaRowID             string                          `json:"codaRowId,omitempty" bson:"codaRowId,omitempty"`                         // Single Coda row ID that was added
+	CodaDevelopmentStatus string                          `json:"codaDevelopmentStatus,omitempty" bson:"codaDevelopmentStatus,omitempty"` // Development status from Coda
 }
 
 // InitializeApprovalWorkflow initializes the approval workflow for a new document
-func (d *Document) InitializeApprovalWorkflow() {
+func (d *Document) InitializeApprovalWorkflow(userID primitive.ObjectID, username string) {
 	d.CurrentApprovalLevel = 1 // Start at level 1 (SH) so it appears in SH's pending approvals
 	d.Approvals = []ApprovalLevel{
 		{
@@ -89,7 +95,7 @@ func (d *Document) CanUserApprove(userRole string) bool {
 }
 
 // ApproveCurrentLevel approves the current approval level
-func (d *Document) ApproveCurrentLevel(approverID primitive.ObjectID, comments string) error {
+func (d *Document) ApproveCurrentLevel(approverID primitive.ObjectID, username string, comments string) error {
 	currentLevel := d.GetCurrentApprovalLevel()
 	if currentLevel == nil {
 		return fmt.Errorf("no current approval level found")
@@ -107,7 +113,9 @@ func (d *Document) ApproveCurrentLevel(approverID primitive.ObjectID, comments s
 
 		// Update document status based on current level
 		if d.CurrentApprovalLevel > len(d.Approvals) {
+			// All approvals completed - set to Final Approved and level 4
 			d.Status = "Final Approved"
+			d.CurrentApprovalLevel = 4
 		} else {
 			nextLevel := d.GetCurrentApprovalLevel()
 			if nextLevel != nil {
@@ -119,13 +127,17 @@ func (d *Document) ApproveCurrentLevel(approverID primitive.ObjectID, comments s
 				}
 			}
 		}
+	} else {
+		// This should not happen, but if we're already at the last level
+		d.Status = "Final Approved"
+		d.CurrentApprovalLevel = 4
 	}
 
 	return nil
 }
 
 // RejectCurrentLevel rejects the current approval level
-func (d *Document) RejectCurrentLevel(approverID primitive.ObjectID, comments string) error {
+func (d *Document) RejectCurrentLevel(approverID primitive.ObjectID, username string, comments string) error {
 	currentLevel := d.GetCurrentApprovalLevel()
 	if currentLevel == nil {
 		return fmt.Errorf("no current approval level found")
@@ -155,4 +167,20 @@ func (d *Document) IsFullyApproved() bool {
 	}
 
 	return true
+}
+
+// ResetApprovalWorkflow resets the approval workflow for resubmission
+func (d *Document) ResetApprovalWorkflow() {
+	// Reset all approval levels to pending
+	for i := range d.Approvals {
+		d.Approvals[i].Status = "pending"
+		d.Approvals[i].ApproverID = nil
+		d.Approvals[i].ApprovedAt = nil
+		d.Approvals[i].RejectedAt = nil
+		d.Approvals[i].Comments = ""
+	}
+
+	// Reset to first level
+	d.CurrentApprovalLevel = 1
+	d.Status = "Ready for Review"
 }

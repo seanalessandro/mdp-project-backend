@@ -95,10 +95,13 @@ func SetupRoutes(app *fiber.App) {
 	docs.Post("/:id/revise", handlers.ReviseDocument)
 
 	// Approval Workflow Routes - FR-5.4.2: Sequential Approval Flow
-	docs.Post("/:id/submit-review", handlers.SubmitDocumentForReview)    // Submit document for approval workflow
-	docs.Post("/:id/approve", handlers.ApproveDocument)                  // Approve document at current level
-	docs.Post("/:id/reject", handlers.RejectDocument)                    // Reject document at current level
-	docs.Get("/:id/approval-status", handlers.GetDocumentApprovalStatus) // Get approval status and history
+	docs.Post("/:id/submit-review", handlers.SubmitDocumentForReview)         // Submit document for approval workflow
+	docs.Post("/:id/approve", handlers.ApproveDocument)                       // Approve document at current level
+	docs.Post("/:id/reject", handlers.RejectDocument)                         // Reject document at current level
+	docs.Get("/:id/approval-status", handlers.GetDocumentApprovalStatus)      // Get approval status and history
+	docs.Get("/:id/approval-history", handlers.GetDocumentApprovalHistory)    // Get detailed approval history
+	docs.Get("/:id/coda-status", handlers.CheckDocumentCodaStatus)            // Check Coda mutation status
+	docs.Get("/:id/coda-dev-status", handlers.FetchDocumentDevelopmentStatus) // Fetch Coda development status
 
 	// PDF Export Routes - FR-5.3.4: Export document to PDF
 	docs.Get("/:id/export/pdf", handlers.ExportDocumentToPDF)    // Download PDF

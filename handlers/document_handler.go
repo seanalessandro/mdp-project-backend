@@ -229,8 +229,8 @@ func UpdateDocumentStatus(c *fiber.Ctx) error {
 		},
 	}
 
-	// Pemicu: saat status diubah menjadi In Review atau Approved
-	if body.Status == "In Review" || body.Status == "Approved" {
+	// Pemicu: saat status diubah menjadi Final Approved
+	if body.Status == "Final Approved" {
 		// Panggil helper untuk membuat snapshot versi
 		err := helperCreateVersion(docID, "Status changed to "+body.Status)
 		if err != nil {
@@ -244,11 +244,37 @@ func UpdateDocumentStatus(c *fiber.Ctx) error {
 		go func() {
 			codaService := config.GetCodaService()
 			if codaService != nil {
-				err := codaService.UpsertRowIntoProductBacklogTable(currentDoc.Title)
+				codaResp, err := codaService.UpsertRowIntoProductBacklogTable(currentDoc.Title)
 				if err != nil {
 					log.Printf("Failed to upsert document '%s' to Coda product backlog: %v", currentDoc.Title, err)
+					// Update document with sync error
+					collection := config.GetCollection("documents")
+					collection.UpdateOne(context.Background(), bson.M{"_id": docID}, bson.M{
+						"$set": bson.M{
+							"codaSyncStatus": "failed",
+							"codaSyncError":  err.Error(),
+						},
+					})
 				} else {
-					log.Printf("Successfully added document '%s' to Coda product backlog", currentDoc.Title)
+					log.Printf("Successfully added document '%s' to Coda product backlog, Request ID: %s", currentDoc.Title, codaResp.RequestID)
+					// Update document with request ID and pending status
+					collection := config.GetCollection("documents")
+					now := time.Now()
+
+					// Extract the first (and only) row ID from the response
+					var codaRowID string
+					if len(codaResp.AddedRowIDs) > 0 {
+						codaRowID = codaResp.AddedRowIDs[0]
+					}
+
+					collection.UpdateOne(context.Background(), bson.M{"_id": docID}, bson.M{
+						"$set": bson.M{
+							"codaRequestId":  codaResp.RequestID,
+							"codaSyncStatus": "pending",
+							"codaLastSyncAt": now,
+							"codaRowId":      codaRowID,
+						},
+					})
 				}
 			} else {
 				log.Printf("Coda service not available, document '%s' not added to backlog", currentDoc.Title)
@@ -458,13 +484,21 @@ func SubmitDocumentForReview(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "You can only submit your own documents"})
 	}
 
-	// Check if document is in draft status
-	if doc.Status != "Draft" {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Only draft documents can be submitted for review"})
+	// Check if document is in draft or rejected status (allow resubmission of rejected documents)
+	if doc.Status != "Draft" && doc.Status != "Rejected" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Only draft or rejected documents can be submitted for review"})
 	}
 
-	// Initialize approval workflow
-	doc.InitializeApprovalWorkflow()
+	// Initialize or reset approval workflow
+	if doc.Status == "Rejected" {
+		// Reset the workflow for resubmission
+		doc.ResetApprovalWorkflow()
+		// Record resubmission in history
+
+	} else {
+		// Initialize new approval workflow
+		doc.InitializeApprovalWorkflow(userID, claims.Username)
+	}
 
 	// Update the document
 	update := bson.M{
@@ -543,7 +577,7 @@ func ApproveDocument(c *fiber.Ctx) error {
 	}
 
 	// Approve the current level
-	err = doc.ApproveCurrentLevel(userID, body.Comments)
+	err = doc.ApproveCurrentLevel(userID, claims.Username, body.Comments)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
 	}
@@ -562,6 +596,63 @@ func ApproveDocument(c *fiber.Ctx) error {
 	_, err = collection.UpdateOne(context.Background(), bson.M{"_id": docID}, update)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to approve document"})
+	}
+
+	// Check if document is now "Final Approved" and trigger Coda sync
+	if doc.Status == "Final Approved" {
+		log.Printf("Document '%s' has reached Final Approval status, triggering Coda sync", doc.Title)
+		
+		// Create version snapshot for final approval
+		err := helperCreateVersion(docID, "Status changed to "+doc.Status)
+		if err != nil {
+			log.Printf("Failed to create document version: %v", err)
+		} else {
+			// If snapshot was created successfully, increment version
+			collection.UpdateOne(context.Background(), bson.M{"_id": docID}, bson.M{
+				"$inc": bson.M{"version": 1.0},
+			})
+		}
+
+		// Push document to Coda product backlog table
+		go func() {
+			codaService := config.GetCodaService()
+			if codaService != nil {
+				codaResp, err := codaService.UpsertRowIntoProductBacklogTable(doc.Title)
+				if err != nil {
+					log.Printf("Failed to upsert document '%s' to Coda product backlog: %v", doc.Title, err)
+					// Update document with sync error
+					collection := config.GetCollection("documents")
+					collection.UpdateOne(context.Background(), bson.M{"_id": docID}, bson.M{
+						"$set": bson.M{
+							"codaSyncStatus": "failed",
+							"codaSyncError":  err.Error(),
+						},
+					})
+				} else {
+					log.Printf("Successfully added document '%s' to Coda product backlog, Request ID: %s", doc.Title, codaResp.RequestID)
+					// Update document with request ID and pending status
+					collection := config.GetCollection("documents")
+					now := time.Now()
+
+					// Extract the first (and only) row ID from the response
+					var codaRowID string
+					if len(codaResp.AddedRowIDs) > 0 {
+						codaRowID = codaResp.AddedRowIDs[0]
+					}
+
+					collection.UpdateOne(context.Background(), bson.M{"_id": docID}, bson.M{
+						"$set": bson.M{
+							"codaRequestId":  codaResp.RequestID,
+							"codaSyncStatus": "pending",
+							"codaLastSyncAt": now,
+							"codaRowId":      codaRowID,
+						},
+					})
+				}
+			} else {
+				log.Printf("Coda service not available, document '%s' not added to backlog", doc.Title)
+			}
+		}()
 	}
 
 	// Log the activity
@@ -628,7 +719,7 @@ func RejectDocument(c *fiber.Ctx) error {
 	}
 
 	// Reject the current level
-	err = doc.RejectCurrentLevel(userID, body.Comments)
+	err = doc.RejectCurrentLevel(userID, claims.Username, body.Comments)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
 	}
@@ -976,4 +1067,214 @@ func GetDocuments(c *fiber.Ctx) error {
 	}
 
 	return c.JSON(documents)
+}
+
+// CheckDocumentCodaStatus checks the Coda mutation status for a document
+func CheckDocumentCodaStatus(c *fiber.Ctx) error {
+	// Get document ID from params
+	docID := c.Params("id")
+	if docID == "" {
+		return c.Status(400).JSON(fiber.Map{
+			"status":  "error",
+			"message": "Document ID is required",
+		})
+	}
+
+	// Convert to ObjectID
+	objectID, err := primitive.ObjectIDFromHex(docID)
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{
+			"status":  "error",
+			"message": "Invalid document ID",
+		})
+	}
+
+	// Get document from database
+	collection := config.GetCollection("documents")
+	var doc models.Document
+	err = collection.FindOne(context.Background(), bson.M{"_id": objectID}).Decode(&doc)
+	if err != nil {
+		if err == mongo.ErrNoDocuments {
+			return c.Status(404).JSON(fiber.Map{
+				"status":  "error",
+				"message": "Document not found",
+			})
+		}
+		return c.Status(500).JSON(fiber.Map{
+			"status":  "error",
+			"message": "Failed to retrieve document",
+		})
+	}
+
+	// Check if document has a Coda request ID
+	if doc.CodaRequestID == "" {
+		return c.Status(400).JSON(fiber.Map{
+			"status":  "error",
+			"message": "Document has no Coda sync request",
+		})
+	}
+
+	// Check mutation status with Coda
+	codaService := config.GetCodaService()
+	if codaService == nil {
+		return c.Status(500).JSON(fiber.Map{
+			"status":  "error",
+			"message": "Coda service not available",
+		})
+	}
+
+	mutationStatus, err := codaService.CheckMutationStatus(doc.CodaRequestID)
+	if err != nil {
+		// Update document with sync error
+		now := time.Now()
+		collection.UpdateOne(context.Background(), bson.M{"_id": objectID}, bson.M{
+			"$set": bson.M{
+				"codaSyncStatus": "failed",
+				"codaSyncError":  err.Error(),
+				"codaLastSyncAt": now,
+			},
+		})
+
+		return c.Status(500).JSON(fiber.Map{
+			"status":  "error",
+			"message": fmt.Sprintf("Failed to check Coda mutation status: %v", err),
+		})
+	}
+
+	// Update document with latest sync status
+	now := time.Now()
+	syncStatus := "pending"
+	if mutationStatus.Completed {
+		syncStatus = "completed"
+	}
+
+	var syncError string
+	if mutationStatus.Warning != "" {
+		syncError = mutationStatus.Warning
+	}
+
+	updateDoc := bson.M{
+		"codaSyncStatus": syncStatus,
+		"codaLastSyncAt": now,
+	}
+
+	if syncError != "" {
+		updateDoc["codaSyncError"] = syncError
+	} else {
+		updateDoc["codaSyncError"] = ""
+	}
+
+	_, err = collection.UpdateOne(context.Background(), bson.M{"_id": objectID}, bson.M{
+		"$set": updateDoc,
+	})
+	if err != nil {
+		log.Printf("Failed to update document sync status: %v", err)
+	}
+
+	return c.JSON(fiber.Map{
+		"status": "success",
+		"data": fiber.Map{
+			"requestId":  doc.CodaRequestID,
+			"syncStatus": syncStatus,
+			"completed":  mutationStatus.Completed,
+			"warning":    mutationStatus.Warning,
+			"lastSyncAt": now,
+		},
+	})
+}
+
+// FetchDocumentDevelopmentStatus fetches the development status from Coda for a document
+func FetchDocumentDevelopmentStatus(c *fiber.Ctx) error {
+	// Get document ID from params
+	docID := c.Params("id")
+	if docID == "" {
+		return c.Status(400).JSON(fiber.Map{
+			"status":  "error",
+			"message": "Document ID is required",
+		})
+	}
+
+	// Convert to ObjectID
+	objectID, err := primitive.ObjectIDFromHex(docID)
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{
+			"status":  "error",
+			"message": "Invalid document ID",
+		})
+	}
+
+	// Get document from database
+	collection := config.GetCollection("documents")
+	var doc models.Document
+	err = collection.FindOne(context.Background(), bson.M{"_id": objectID}).Decode(&doc)
+	if err != nil {
+		if err == mongo.ErrNoDocuments {
+			return c.Status(404).JSON(fiber.Map{
+				"status":  "error",
+				"message": "Document not found",
+			})
+		}
+		return c.Status(500).JSON(fiber.Map{
+			"status":  "error",
+			"message": "Failed to retrieve document",
+		})
+	}
+
+	// Check if document has a Coda row ID
+	if doc.CodaRowID == "" {
+		return c.Status(400).JSON(fiber.Map{
+			"status":  "error",
+			"message": "Document has no Coda row ID",
+		})
+	}
+
+	// Check if sync status is completed
+	if doc.CodaSyncStatus != "completed" {
+		return c.Status(400).JSON(fiber.Map{
+			"status":  "error",
+			"message": "Document sync is not completed yet",
+		})
+	}
+
+	// Get development status from Coda
+	codaService := config.GetCodaService()
+	if codaService == nil {
+		return c.Status(500).JSON(fiber.Map{
+			"status":  "error",
+			"message": "Coda service not available",
+		})
+	}
+
+	developmentStatus, err := codaService.GetRowDevelopmentStatus(doc.CodaRowID)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{
+			"status":  "error",
+			"message": fmt.Sprintf("Failed to fetch development status: %v", err),
+		})
+	}
+
+	// Update document with development status
+	now := time.Now()
+	_, err = collection.UpdateOne(context.Background(), bson.M{"_id": objectID}, bson.M{
+		"$set": bson.M{
+			"codaDevelopmentStatus": developmentStatus,
+			"modifiedOn":            now,
+		},
+	})
+	if err != nil {
+		log.Printf("Failed to update document development status: %v", err)
+		return c.Status(500).JSON(fiber.Map{
+			"status":  "error",
+			"message": "Failed to update document with development status",
+		})
+	}
+
+	return c.JSON(fiber.Map{
+		"status": "success",
+		"data": fiber.Map{
+			"developmentStatus": developmentStatus,
+			"updatedAt":         now,
+		},
+		"message": "Development status fetched successfully",
+	})
 }
