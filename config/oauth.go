@@ -21,7 +21,7 @@ func SetupOAuth() {
 	}
 
 	GoogleOAuthConfig = &oauth2.Config{
-		RedirectURL:  "https://bridge-backend.site/api/v1/auth/google/callback",
+		RedirectURL:  "https://bridge-backend.site/api/auth/google/callback",
 		ClientID:     clientID,
 		ClientSecret: clientSecret,
 		Scopes: []string{
