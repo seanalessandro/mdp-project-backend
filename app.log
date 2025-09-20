@@ -1,0 +1,7 @@
+nohup: ignoring input
+2025/09/20 08:46:07 Connected to MongoDB successfully!
+2025/09/20 08:46:07 Email service initialized successfully!
+2025/09/20 08:46:07 Coda API service initialized successfully!
+2025/09/20 08:46:07 Server starting on port 3033...
+2025/09/20 08:46:07 failed to listen: listen tcp4 :3033: bind: address already in use
+exit status 1
