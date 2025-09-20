@@ -28,7 +28,9 @@ func main() {
 	app := fiber.New()
 
 	// 4. Tambahkan Middleware
-	app.Use(cors.New())   // Middleware untuk CORS
+	app.Use(cors.New(cors.Config{
+          AllowOrigins: "*",
+        }))
 	app.Use(logger.New()) // Middleware untuk logging request
 
 	app.Static("/", "./public")
