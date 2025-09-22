@@ -7,23 +7,23 @@ import (
 )
 
 type User struct {
-	Username     string `json:"username" bson:"username,unique"`
-	Email        string `json:"email" bson:"email,unique"`
-	Password     string `json:"-" bson:"password,omitempty"`
-	FullName     string `json:"fullName" bson:"fullName"`
-	UnitKerja    string `json:"unitKerja,omitempty" bson:"unitKerja,omitempty"`
+	Username  string `json:"username" bson:"username,unique"`
+	Email     string `json:"email" bson:"email,unique"`
+	Password  string `json:"-" bson:"password,omitempty"`
+	FullName  string `json:"fullName" bson:"fullName"`
+	UnitKerja string `json:"unitKerja,omitempty" bson:"unitKerja,omitempty"`
 	// --- PERUBAHAN PENTING ---
-	RoleID       primitive.ObjectID `json:"roleId" bson:"roleId"`
+	RoleID primitive.ObjectID `json:"roleId" bson:"roleId"`
 	// --------------------------
-	IsActive     bool       `json:"isActive" bson:"isActive"`
-	LastLogin    *time.Time `json:"lastLogin,omitempty" bson:"lastLogin,omitempty"`
-	Provider     string     `json:"provider" bson:"provider"`
-	ProviderID   string     `json:"-" bson:"providerId,omitempty"`
+	IsActive   bool       `json:"isActive" bson:"isActive"`
+	LastLogin  *time.Time `json:"lastLogin,omitempty" bson:"lastLogin,omitempty"`
+	Provider   string     `json:"provider" bson:"provider"`
+	ProviderID string     `json:"-" bson:"providerId,omitempty"`
 	// --- REFRESH TOKEN FIELDS ---
 	RefreshToken string     `json:"-" bson:"refreshToken,omitempty"`
 	TokenExpiry  *time.Time `json:"-" bson:"tokenExpiry,omitempty"`
 	// ---------------------------
-	BaseModel    `json:",inline" bson:",inline"`
+	BaseModel `json:",inline" bson:",inline"`
 }
 
 // Struct untuk response login, agar bisa menyertakan detail role

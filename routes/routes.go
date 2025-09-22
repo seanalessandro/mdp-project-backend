@@ -39,7 +39,7 @@ func SetupRoutes(app *fiber.App) {
 	api.Get("/profile", handlers.GetProfile)
 	api.Post("/change-password", handlers.ChangePassword)
 	api.Get("/user/menus", handlers.GetUserMenus) // Get user's accessible menus
-	api.Post("/logout", handlers.Logout) // Meskipun hanya di sisi client, endpoint ini bisa untuk logging
+	api.Post("/logout", handlers.Logout)          // Meskipun hanya di sisi client, endpoint ini bisa untuk logging
 
 	// Contoh rute khusus Admin
 	adminApi := api.Group("/admin", middleware.RoleRequired("admin"))
@@ -103,6 +103,7 @@ func SetupRoutes(app *fiber.App) {
 	docs.Get("/:id/approval-status", handlers.GetDocumentApprovalStatus)      // Get approval status and history
 	docs.Get("/:id/approval-history", handlers.GetDocumentApprovalHistory)    // Get detailed approval history
 	docs.Get("/:id/coda-status", handlers.CheckDocumentCodaStatus)            // Check Coda mutation status
+	docs.Post("/:id/coda-retry", handlers.RetryCodaSync)                      // Retry failed Coda sync
 	docs.Get("/:id/coda-dev-status", handlers.FetchDocumentDevelopmentStatus) // Fetch Coda development status
 
 	// PDF Export Routes - FR-5.3.4: Export document to PDF
