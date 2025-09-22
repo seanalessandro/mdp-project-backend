@@ -28,21 +28,21 @@ func GetUserMenus(c *fiber.Ctx) error {
 	if err != nil {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "User not found"})
 	}
-	
+
 	// Debug logging for user data
 	log.Printf("User found - ID: %s, Role ID: %s", user.ID.Hex(), user.RoleID.Hex())
 
 	// Get role-menu mappings for this user's role
-	mappingCollection := config.GetCollection("role_menu_mapping")  // Changed from plural to singular
+	mappingCollection := config.GetCollection("role_menu_mapping") // Changed from plural to singular
 	var roleMenuMapping struct {
-		RoleID  primitive.ObjectID   `bson:"roleId"`
-		MenuIds []primitive.ObjectID `bson:"menuIds"`
-		IsActive bool                `bson:"isActive"`
+		RoleID   primitive.ObjectID   `bson:"roleId"`
+		MenuIds  []primitive.ObjectID `bson:"menuIds"`
+		IsActive bool                 `bson:"isActive"`
 	}
 
 	// Add debug logging
 	log.Printf("Looking for role mappings for user role ID: %s", user.RoleID.Hex())
-	
+
 	err = mappingCollection.FindOne(context.Background(), bson.M{
 		"roleId":   user.RoleID,
 		"isActive": true,
@@ -51,46 +51,17 @@ func GetUserMenus(c *fiber.Ctx) error {
 	if err != nil {
 		log.Printf("No menu mapping found for role %s: %v", user.RoleID.Hex(), err)
 		
-		// Let's also try to find all role mappings to debug
-		cursor, debugErr := mappingCollection.Find(context.Background(), bson.M{})
-		if debugErr == nil {
-			var allMappings []bson.M
-			if cursor.All(context.Background(), &allMappings) == nil {
-				log.Printf("All role mappings in collection (%d documents):", len(allMappings))
-				for i, mapping := range allMappings {
-					log.Printf("  [%d] Role ID: %v, Active: %v, MenuIds count: %v", i+1, mapping["roleId"], mapping["isActive"], len(mapping["menuIds"].(primitive.A)))
-				}
-			} else {
-				log.Printf("Error decoding all mappings: %v", debugErr)
-			}
-		} else {
-			log.Printf("Error finding all mappings: %v", debugErr)
-		}
-		
-		// Also try with a different collection name in case it's singular
-		altCollection := config.GetCollection("role_menu_mapping")
-		cursor2, debugErr2 := altCollection.Find(context.Background(), bson.M{})
-		if debugErr2 == nil {
-			var altMappings []bson.M
-			if cursor2.All(context.Background(), &altMappings) == nil {
-				log.Printf("Alternative collection 'role_menu_mapping' (%d documents):", len(altMappings))
-				for i, mapping := range altMappings {
-					log.Printf("  [%d] Role ID: %v, Active: %v", i+1, mapping["roleId"], mapping["isActive"])
-				}
-			}
-		}
-		
 		return c.JSON(fiber.Map{
 			"menus": []interface{}{},
 		})
 	}
-	
+
 	log.Printf("Found role mapping with %d menu IDs", len(roleMenuMapping.MenuIds))
 
 	// Get the actual menu details
 	menuCollection := config.GetCollection("menus")
 	cursor, err := menuCollection.Find(context.Background(), bson.M{
-		"_id": bson.M{"$in": roleMenuMapping.MenuIds},
+		"_id":      bson.M{"$in": roleMenuMapping.MenuIds},
 		"isActive": true,
 	})
 	if err != nil {
