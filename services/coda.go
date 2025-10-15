@@ -52,7 +52,7 @@ type CodaMutationStatus struct {
 }
 
 func (c *CodaAPIService) UpsertRowIntoProductBacklogTable(documentName string) (*CodaUpsertResponse, error) {
-	url := fmt.Sprintf("%s/docs/%s/tables/%s/rows", c.BaseURL, "QeY_EXGmPU", "grid-Kf1wPPWSkE")
+	url := fmt.Sprintf("%s/docs/%s/tables/%s/rows", c.BaseURL, "izhKV9mlbM", "grid-Kf1wPPWSkE")
 
 	// Debug: Log the URL and config
 	log.Printf("Coda API Debug - URL: %s", url)
@@ -227,7 +227,7 @@ type CodaRowResponse struct {
 
 // GetRowDevelopmentStatus fetches the development status from a Coda row
 func (c *CodaAPIService) GetRowDevelopmentStatus(codaRowID string) (string, error) {
-	url := fmt.Sprintf("%s/docs/%s/tables/%s/rows/%s", c.BaseURL, "QeY_EXGmPU", "grid-fE_BG-D9lV", codaRowID)
+	url := fmt.Sprintf("%s/docs/%s/tables/%s/rows/%s", c.BaseURL, "izhKV9mlbM", "grid-Kf1wPPWSkE", codaRowID)
 
 	httpReq, err := http.NewRequest("GET", url, nil)
 	if err != nil {
