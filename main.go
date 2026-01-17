@@ -29,8 +29,8 @@ func main() {
 
 	// 4. Tambahkan Middleware
 	app.Use(cors.New(cors.Config{
-          AllowOrigins: "*",
-        }))
+		AllowOrigins: "*",
+	}))
 	app.Use(logger.New()) // Middleware untuk logging request
 
 	app.Static("/", "./public")
@@ -44,5 +44,6 @@ func main() {
 		port = "3033"
 	}
 	log.Printf("Server starting on port %s...", port)
+	log.Printf("This is a backend service for MDP Project.")
 	log.Fatal(app.Listen(":" + port))
 }
