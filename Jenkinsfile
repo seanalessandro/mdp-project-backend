@@ -1,6 +1,10 @@
 pipeline {
     agent any
 
+    tools {
+        go 'Go For Bridge Backend'
+    }
+
     environment {
         // Set GOPATH if needed, or rely on Go Modules (recommended)
         GO111MODULE = 'on'
