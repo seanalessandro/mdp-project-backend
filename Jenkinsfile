@@ -25,15 +25,13 @@ pipeline {
             }
         }
 
-        stage('Deploy') {
+       stage('Deploy') {
             steps {
-                // Example: Restarting a service or moving binary
-                // NOTE: This depends heavily on your setup (Docker, SSH, Kubernetes)
-                echo 'Deploying application...'
-                
-                // Simple example: Move binary to a run folder and restart service
+                // 1. Move the binary (Works because of Step 1)
                 sh 'mv bridge-backend /var/www/backend/'
-                // sh 'sudo systemctl restart my-go-service'
+                
+                // 2. Restart the service (Works because of Step 2)
+                sh 'sudo systemctl restart my-go-service'
             }
         }
     }
