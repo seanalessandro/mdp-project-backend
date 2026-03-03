@@ -21,7 +21,7 @@ func SetupOAuth() {
 	}
 
 	GoogleOAuthConfig = &oauth2.Config{
-		RedirectURL:  "https://bridge-backend.site/api/auth/google/callback",
+		RedirectURL:  "http://ss-dev-app.mayora.co.id:3033//api/auth/google/callback",
 		ClientID:     clientID,
 		ClientSecret: clientSecret,
 		Scopes: []string{
